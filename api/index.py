@@ -22,14 +22,18 @@ SIMULATION_MODE = "normal"
 HISTORY_LEN = 12
 METRICS = ["water_level", "water_flow", "rainfall", "temperature", "humidity"]
 
+# NOTE — lat/lng below are placeholders centered on Brgy. Mambog IV, Bacoor,
+# Cavite (approx. 14.4228, 120.9617) with small offsets standing in for the
+# 4 node directions. Replace with your actual surveyed GPS coordinates once
+# the ESP32 nodes are physically sited.
 NODE_META = {
-    "inflow_a": {"label": "Inflow A", "desc": "Upstream Creek — Purok 1", "kind": "inflow", "x": 15, "y": 20},
-    "inflow_b": {"label": "Inflow B", "desc": "Upstream Canal — Purok 3", "kind": "inflow", "x": 15, "y": 80},
-    "inflow_c": {"label": "Inflow C", "desc": "Storm Drain — Access Rd.", "kind": "inflow", "x": 48, "y": 10},
-    "outflow":  {"label": "Outflow",  "desc": "Main Drainage Exit",       "kind": "outflow", "x": 87, "y": 50},
+    "inflow_a": {"label": "Inflow A", "desc": "Upstream Creek — Purok 1", "kind": "inflow", "x": 15, "y": 20, "lat": 14.4250, "lng": 120.9592},
+    "inflow_b": {"label": "Inflow B", "desc": "Upstream Canal — Purok 3", "kind": "inflow", "x": 15, "y": 80, "lat": 14.4206, "lng": 120.9592},
+    "inflow_c": {"label": "Inflow C", "desc": "Storm Drain — Access Rd.", "kind": "inflow", "x": 48, "y": 10, "lat": 14.4256, "lng": 120.9622},
+    "outflow":  {"label": "Outflow",  "desc": "Main Drainage Exit",       "kind": "outflow", "x": 87, "y": 50, "lat": 14.4223, "lng": 120.9652},
 }
 NODE_ORDER = ["inflow_a", "inflow_b", "inflow_c", "outflow"]
-HQ_META = {"label": "Barangay HQ", "desc": "Brgy. Mambog IV Hall", "x": 48, "y": 50}
+HQ_META = {"label": "Barangay HQ", "desc": "Brgy. Mambog IV Hall", "x": 48, "y": 50, "lat": 14.4228, "lng": 120.9617}
 
 TIER_COLOR = {"high": "#e14b4b", "medium": "#f59e0b", "low": "#eab308"}
 TIER_LABEL = {"high": "HIGH", "medium": "MEDIUM", "low": "LOW"}
@@ -100,6 +104,7 @@ DASHBOARD_HTML = """
     <meta charset="UTF-8">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
     <style>
         :root{
             --navy:#0f1b2d; --navy-2:#16263d;
@@ -183,13 +188,13 @@ DASHBOARD_HTML = """
         .cam-card .meta .name{ font-size:0.8em; font-weight:600; color:#fff; }
         .cam-card .meta .sub{ font-size:0.68em; color:#7f93ab; margin-top:2px; }
 
-        .site-map{ width:100%; height:auto; display:block; }
-        .site-map .basemap-line{ stroke:#dfe6ee; stroke-width:2; }
-        .site-map .channel{ stroke:#a9c3ea; stroke-width:2.5; fill:none; stroke-dasharray:4 3; }
-        .site-map .node-dot{ cursor:pointer; }
-        .site-map text{ font-family:'Inter',sans-serif; fill:var(--mute); font-size:6.5px; }
-        .site-map text.node-label{ fill:var(--ink); font-weight:700; font-size:7px; }
-        .site-map .hq-label{ fill:var(--navy); font-weight:700; font-size:7.5px; }
+        #gis-map{ width:100%; height:230px; border-radius:10px; overflow:hidden; border:1px solid var(--line); }
+        .map-caption{ color:var(--mute); font-size:0.74em; margin:10px 0 0 0; line-height:1.5; }
+        .gis-pin{ display:flex; align-items:center; justify-content:center; }
+        .gis-pin .core{ width:16px; height:16px; border-radius:50%; border:3px solid #fff; box-shadow:0 1px 4px rgba(0,0,0,0.35); }
+        .gis-pin.hq .core{ width:14px; height:14px; border-radius:4px; background:var(--navy); border-color:#fff; }
+        .leaflet-popup-content{ font-family:'Inter',sans-serif; font-size:0.85em; }
+        .leaflet-popup-content b{ display:block; margin-bottom:2px; }
 
         /* ---------- BOTTOM GRID ---------- */
         .bottom-grid{ display:grid; grid-template-columns:1.4fr 1fr; gap:16px; margin-bottom:16px; align-items:start; }
@@ -337,33 +342,9 @@ DASHBOARD_HTML = """
             </div>
 
             <div class="panel" id="risk-map">
-                <h3>Geometric Risk Map</h3>
-                <svg class="site-map" viewBox="0 0 100 90" preserveAspectRatio="xMidYMid meet">
-                    <line class="basemap-line" x1="0" y1="30" x2="100" y2="30"/>
-                    <line class="basemap-line" x1="0" y1="65" x2="100" y2="65"/>
-                    <line class="basemap-line" x1="35" y1="0" x2="35" y2="90"/>
-                    <line class="basemap-line" x1="70" y1="0" x2="70" y2="90"/>
-                    <path class="channel" d="M 15 20 Q 32 35 48 50" />
-                    <path class="channel" d="M 15 80 Q 32 65 48 50" />
-                    <path class="channel" d="M 48 10 Q 48 30 48 50" />
-                    <path class="channel" d="M 48 50 Q 68 50 87 50" />
-
-                    <g>
-                        <rect x="44" y="46" width="8" height="8" rx="1.5" fill="{{ '#0f1b2d' }}" />
-                        <text class="hq-label" x="48" y="42" text-anchor="middle">{{ hq.label }}</text>
-                        <text x="48" y="63" text-anchor="middle">{{ hq.desc }}</text>
-                    </g>
-
-                    {% for nid in node_order %}
-                    {% set m = meta[nid] %}
-                    <g class="node-dot" data-node="{{ nid }}" onclick="selectNode('{{ nid }}')">
-                        <circle class="ring" id="ring-{{ nid }}" cx="{{ m.x }}" cy="{{ m.y }}" r="5.5" fill="{{ tier_color[nid] }}" opacity="0.25"/>
-                        <circle class="core" cx="{{ m.x }}" cy="{{ m.y }}" r="2.6" fill="{{ tier_color[nid] }}" id="core-{{ nid }}"/>
-                        <text class="node-label" x="{{ m.x }}" y="{{ m.y - 9 }}" text-anchor="middle">{{ m.label }}</text>
-                        <text x="{{ m.x }}" y="{{ m.y + 12 }}" text-anchor="middle">{{ m.kind }}</text>
-                    </g>
-                    {% endfor %}
-                </svg>
+                <h3>GIS Risk Map <span class="sub">OpenStreetMap · live node status</span></h3>
+                <div id="gis-map"></div>
+                <p class="map-caption">Node pins are colored by live risk tier. Coordinates are placeholders centered on Brgy. Mambog IV — swap in surveyed GPS once nodes are sited.</p>
             </div>
         </div>
 
@@ -429,6 +410,7 @@ DASHBOARD_HTML = """
         </div>
     </div>
 
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
     <script>
         const NODE_META = {{ meta_json | safe }};
         let currentNode = "{{ active }}";
@@ -521,6 +503,41 @@ DASHBOARD_HTML = """
             currentNode = nid;
             document.querySelectorAll('.npick').forEach(el => el.classList.toggle('active', el.dataset.node === nid));
             if (window.lastData) renderNode(nid, window.lastData.status[nid], window.lastData.history[nid]);
+            if (window.gisMarkers && window.gisMarkers[nid]) window.gisMarkers[nid].openPopup();
+        }
+
+        function pinIcon(color, isHq){
+            const cls = isHq ? 'gis-pin hq' : 'gis-pin';
+            const bg = isHq ? '' : ('background:' + color + ';');
+            return L.divIcon({
+                className: '',
+                html: '<div class="' + cls + '"><div class="core" style="' + bg + '"></div></div>',
+                iconSize: [22, 22],
+                iconAnchor: [11, 11]
+            });
+        }
+
+        function initGisMap(){
+            const map = L.map('gis-map', { zoomControl: true, attributionControl: true }).setView([{{ hq.lat }}, {{ hq.lng }}], 15);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                maxZoom: 19,
+                attribution: '&copy; OpenStreetMap contributors'
+            }).addTo(map);
+
+            L.marker([{{ hq.lat }}, {{ hq.lng }}], { icon: pinIcon(null, true) })
+                .addTo(map)
+                .bindPopup('<b>{{ hq.label }}</b>{{ hq.desc }}');
+
+            window.gisMarkers = {};
+            Object.keys(NODE_META).forEach(nid => {
+                const m = NODE_META[nid];
+                const tier = (window.lastData && window.lastData.tier[nid]) || 'low';
+                const color = (window.lastData && window.lastData.tier_color[tier]) || '#eab308';
+                const marker = L.marker([m.lat, m.lng], { icon: pinIcon(color, false) }).addTo(map);
+                marker.bindPopup('<b>' + m.label + '</b>' + m.desc);
+                marker.on('click', () => selectNode(nid));
+                window.gisMarkers[nid] = marker;
+            });
         }
 
         async function poll(){
@@ -531,17 +548,17 @@ DASHBOARD_HTML = """
                 Object.keys(data.status).forEach(nid => {
                     const tier = data.tier[nid];
                     const color = data.tier_color[tier];
-                    const core = document.getElementById('core-' + nid);
-                    const ring = document.getElementById('ring-' + nid);
-                    if (core) core.setAttribute('fill', color);
-                    if (ring) ring.setAttribute('fill', color);
                     const pick = document.querySelector('.npick[data-node="' + nid + '"] .dot');
                     if (pick) pick.style.background = color;
+                    if (window.gisMarkers && window.gisMarkers[nid]) {
+                        window.gisMarkers[nid].setIcon(pinIcon(color, false));
+                    }
                 });
                 renderNode(currentNode, data.status[currentNode], data.history[currentNode]);
             } catch(e){ console.error('poll failed', e); }
         }
         poll();
+        initGisMap();
         setInterval(poll, 3000);
     </script>
 </body>
