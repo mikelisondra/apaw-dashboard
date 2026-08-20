@@ -92,6 +92,17 @@ def synth_reading(node_id, tick_offset=0):
             "humidity": round(70.0 + wobble * 10.0, 1),
             "timestamp": now
         }
+    elif SIMULATION_MODE == "moderate":
+        return {
+            "risk_level": "Normal",
+            "confidence": round(93 + wobble * 4, 1),
+            "water_level": round(1.2 + wobble * 0.6, 2),
+            "water_flow": round(5.0 + wobble * 4.0, 2),
+            "rainfall": round(10.0 + wobble * 12.0, 1),
+            "temperature": round(26.0 + wobble * 2.5, 1),
+            "humidity": round(82.0 + wobble * 8.0, 1),
+            "timestamp": now
+        }
     else:
         return {
             "risk_level": "Critical",
@@ -232,8 +243,15 @@ DASHBOARD_HTML = """
             --navy:#0f1b2d; --navy-2:#16263d;
             --bg:#f2f4f7; --card:#ffffff; --line:#e6eaf0;
             --ink:#0f2438; --mute:#6b7c8f;
+            --card2:#f8fafc; --chip:#eef1f5; --active-tint:#eaf1fd; --flag-tint:#fdecec;
             --blue:#2e6fd6; --cyan:#22b8cf; --orange:#f2994a; --violet:#7b6cf6; --teal:#12b3a8;
             --red:#e14b4b; --amber:#f59e0b; --yellow:#eab308; --green:#22a06b;
+        }
+        :root[data-theme="dark"]{
+            --navy:#070d17; --navy-2:#0f1a2b;
+            --bg:#0b1220; --card:#101826; --line:#232f3f;
+            --ink:#e6ebf2; --mute:#8b99ad;
+            --card2:#16212f; --chip:#1c2836; --active-tint:rgba(46,111,214,0.22); --flag-tint:rgba(225,75,75,0.18);
         }
         *{ box-sizing:border-box; }
         html{ scroll-behavior:smooth; }
@@ -266,6 +284,9 @@ DASHBOARD_HTML = """
         @keyframes pulseDot{ 0%,100%{opacity:1;} 50%{opacity:0.35;} }
         .presenter-link{ color:var(--mute); text-decoration:none; border:1px solid var(--line); padding:5px 10px; border-radius:6px; font-size:0.82em; }
         .presenter-link:hover{ border-color:var(--blue); color:var(--blue); }
+        .theme-toggle{ background:var(--card); border:1px solid var(--line); color:var(--ink); width:32px; height:32px; border-radius:8px; display:flex; align-items:center; justify-content:center; cursor:pointer; }
+        .theme-toggle svg{ width:16px; height:16px; }
+        .theme-toggle:hover{ border-color:var(--blue); color:var(--blue); }
 
         .strobe-banner{ display:flex; align-items:center; gap:10px; padding:12px 18px; border-radius:10px; font-weight:700; font-size:0.9em; margin-bottom:16px; }
         .strobe-banner.medium{ background:rgba(245,158,11,0.12); color:#b96e06; border:1px solid rgba(245,158,11,0.4); }
@@ -295,7 +316,7 @@ DASHBOARD_HTML = """
         .node-picker{ display:flex; gap:8px; margin-bottom:20px; flex-wrap:wrap; }
         .npick{ background:var(--card); border:1px solid var(--line); border-radius:20px; padding:7px 14px; font-size:0.82em; font-weight:600; color:var(--mute); cursor:pointer; display:flex; align-items:center; gap:7px; }
         .npick .dot{ width:7px; height:7px; border-radius:50%; }
-        .npick.active{ border-color:var(--blue); color:var(--blue); background:#eaf1fd; }
+        .npick.active{ border-color:var(--blue); color:var(--blue); background:var(--active-tint); }
         .npick.main-pick{ border-color:var(--navy); }
         .npick.main-pick.active{ background:var(--navy); color:#fff; border-color:var(--navy); }
         .main-icon{ font-size:1em; line-height:1; }
@@ -333,6 +354,20 @@ DASHBOARD_HTML = """
         .cam-container.grid-mode{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
         .cam-container.grid-mode .cam-card{ margin-bottom:0; }
         .cam-container.grid-mode .cam-card .frame{ height:70px; }
+        .cam-container.grid-mode .cam-card{ cursor:grab; }
+        .cam-container.grid-mode .cam-card:active{ cursor:grabbing; }
+        .cam-card{ transition:opacity 0.15s ease, transform 0.15s ease; }
+
+        .cam-modal{ display:none; position:fixed; inset:0; background:rgba(5,10,20,0.78); z-index:3000; align-items:center; justify-content:center; padding:20px; }
+        .cam-modal-inner{ background:#0c1726; border-radius:16px; max-width:560px; width:100%; position:relative; overflow:hidden; }
+        .cam-modal-close{ position:absolute; top:12px; right:12px; background:rgba(255,255,255,0.1); color:#fff; border:none; width:32px; height:32px; border-radius:50%; font-size:1em; cursor:pointer; z-index:2; }
+        .cam-modal-frame{ height:280px; display:flex; align-items:center; justify-content:center; background:linear-gradient(135deg,#16283f,#0b1420); color:#3a5878; }
+        .cam-modal-frame svg{ width:60px; height:60px; }
+        .cam-modal-meta{ padding:18px 22px 22px; color:#e8eef4; }
+        .cam-modal-meta h3{ margin:10px 0 4px 0; font-size:1.1em; }
+        .cam-modal-meta p{ margin:0 0 4px 0; color:#8b99ad; font-size:0.88em; }
+        .cam-modal-note{ font-style:italic; }
+        .cam-modal-meta .rec{ position:static; display:inline-flex; }
 
         #gis-map{ width:100%; height:230px; border-radius:10px; overflow:hidden; border:1px solid var(--line); transition:height 0.25s ease; }
         #gis-map-wrap{ position:relative; }
@@ -348,6 +383,9 @@ DASHBOARD_HTML = """
         .gis-cam svg{ width:13px; height:13px; }
         .gis-cam-label{ text-align:center; font-size:0.68em; font-weight:700; color:#fff; text-shadow:0 1px 3px rgba(0,0,0,0.8); margin-top:2px; }
         .leaflet-popup-content{ font-family:'Inter',sans-serif; font-size:0.85em; }
+        :root[data-theme="dark"] .leaflet-popup-content-wrapper,
+        :root[data-theme="dark"] .leaflet-popup-tip{ background:#16212f; color:#e6ebf2; }
+        :root[data-theme="dark"] .leaflet-container{ background:#0b1220; }
         .leaflet-popup-content b{ display:block; margin-bottom:2px; }
 
         /* ---------- BOTTOM GRID ---------- */
@@ -368,16 +406,16 @@ DASHBOARD_HTML = """
         /* ---------- VERIFICATION QUEUE (kept from earlier build) ---------- */
         .queue-panel{ background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px 20px; margin-bottom:16px; }
         .empty-queue{ color:var(--mute); text-align:center; padding:28px 0; font-size:0.88em; }
-        .report{ background:#f8fafc; border:1px solid var(--line); border-radius:10px; padding:12px; margin-bottom:10px; display:flex; gap:14px; align-items:center; }
+        .report{ background:var(--card2); border:1px solid var(--line); border-radius:10px; padding:12px; margin-bottom:10px; display:flex; gap:14px; align-items:center; }
         .report img{ width:80px; height:80px; object-fit:cover; border-radius:7px; flex-shrink:0; }
         .report-info h4{ margin:0 0 3px 0; font-size:0.92em; }
         .report-info p{ margin:0 0 8px 0; color:var(--mute); font-size:0.8em; }
-        .report-info .tag{ display:inline-block; background:#eef1f5; color:var(--mute); font-size:0.68em; padding:2px 8px; border-radius:20px; margin-bottom:6px; }
+        .report-info .tag{ display:inline-block; background:var(--chip); color:var(--mute); font-size:0.68em; padding:2px 8px; border-radius:20px; margin-bottom:6px; }
         .report-actions{ display:flex; gap:8px; }
         .btn-verify{ background:var(--green); color:#fff; padding:7px 14px; text-decoration:none; border-radius:6px; font-weight:600; font-size:0.82em; }
         .btn-reject{ background:transparent; color:var(--red); padding:7px 14px; text-decoration:none; border-radius:6px; font-weight:600; font-size:0.82em; border:1px solid var(--red); }
-        .btn-verified{ background:#eef1f5; color:var(--mute); padding:7px 14px; border-radius:6px; font-weight:600; font-size:0.82em; }
-        .btn-flagged{ background:#fdecec; color:var(--red); padding:7px 14px; border-radius:6px; font-weight:600; font-size:0.82em; }
+        .btn-verified{ background:var(--chip); color:var(--mute); padding:7px 14px; border-radius:6px; font-weight:600; font-size:0.82em; }
+        .btn-flagged{ background:var(--flag-tint); color:var(--red); padding:7px 14px; border-radius:6px; font-weight:600; font-size:0.82em; }
 
         .footer{ display:flex; justify-content:space-between; color:var(--mute); font-size:0.78em; padding-top:6px; }
 
@@ -387,7 +425,7 @@ DASHBOARD_HTML = """
         .hist-table tr:last-child td{ border-bottom:none; }
 
         .sys-grid{ display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:14px; }
-        .sys-card{ background:#f8fafc; border:1px solid var(--line); border-radius:10px; padding:14px 16px; }
+        .sys-card{ background:var(--card2); border:1px solid var(--line); border-radius:10px; padding:14px 16px; }
         .sys-top{ display:flex; align-items:center; gap:8px; margin-bottom:4px; }
         .sys-dot{ width:9px; height:9px; border-radius:50%; flex-shrink:0; }
         .sys-sub{ color:var(--mute); font-size:0.8em; margin-bottom:10px; }
@@ -411,7 +449,7 @@ DASHBOARD_HTML = """
         .toggle-row{ display:flex; align-items:center; gap:10px; font-size:0.88em; margin-bottom:12px; cursor:pointer; }
         .settings-status{ margin-top:10px; font-size:0.82em; color:var(--green); font-weight:600; min-height:1.2em; }
         .sys-metrics{ display:grid; grid-template-columns:repeat(auto-fit, minmax(160px,1fr)); gap:12px; }
-        .sys-metric{ background:#f8fafc; border:1px solid var(--line); border-radius:10px; padding:14px; }
+        .sys-metric{ background:var(--card2); border:1px solid var(--line); border-radius:10px; padding:14px; }
         .sys-metric .m-label{ color:var(--mute); font-size:0.75em; text-transform:uppercase; margin-bottom:6px; }
         .sys-metric .m-val{ font-family:'IBM Plex Mono',monospace; font-weight:700; font-size:1.3em; }
 
@@ -453,6 +491,10 @@ DASHBOARD_HTML = """
             <div class="right">
                 <span id="top-datetime">—</span>
                 <span class="live-dot"><span class="pulse"></span>Live</span>
+                <button class="theme-toggle" id="theme-toggle" onclick="toggleTheme()" aria-label="Toggle light/dark theme">
+                    <svg id="theme-icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M2 12h2M20 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"/></svg>
+                    <svg id="theme-icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none;"><path d="M21 12.8A9 9 0 1111.2 3 7 7 0 0021 12.8z"/></svg>
+                </button>
                 <a href="/controls" class="presenter-link" target="_blank" rel="noopener">Presenter tools →</a>
             </div>
         </div>
@@ -546,6 +588,13 @@ DASHBOARD_HTML = """
             <div class="panel">
                 <h3>Live Camera Feeds <span class="sub" id="cam-panel-sub">{{ meta[active].label }}</span></h3>
                 <div id="cam-container" class="cam-container"></div>
+            </div>
+
+            <div class="cam-modal" id="cam-modal" onclick="if(event.target===this) closeCamModal();">
+                <div class="cam-modal-inner">
+                    <button class="cam-modal-close" onclick="closeCamModal()">✕</button>
+                    <div id="cam-modal-body"></div>
+                </div>
             </div>
 
             <div class="panel" id="risk-map">
@@ -706,6 +755,39 @@ DASHBOARD_HTML = """
     <script>
         const NODE_META = {{ meta_json | safe }};
         const NODE_ORDER_JS = {{ node_order | tojson }};
+
+        // ============================================================
+        // THEME — light/dark toggle for the whole dashboard, including
+        // the GIS map tiles. Applied immediately on load (before the map
+        // initializes) so there's no flash of the wrong theme.
+        // ============================================================
+        function applyTheme(theme){
+            document.documentElement.setAttribute('data-theme', theme);
+            const sun = document.getElementById('theme-icon-sun');
+            const moon = document.getElementById('theme-icon-moon');
+            if (sun && moon){
+                sun.style.display = theme === 'dark' ? 'none' : 'block';
+                moon.style.display = theme === 'dark' ? 'block' : 'none';
+            }
+        }
+        function toggleTheme(){
+            const current = document.documentElement.getAttribute('data-theme') || 'light';
+            const next = current === 'dark' ? 'light' : 'dark';
+            applyTheme(next);
+            localStorage.setItem('apawTheme', next);
+            if (window.gisMap && window.gisTileLayer){
+                window.gisMap.removeLayer(window.gisTileLayer);
+                window.gisTileLayer = L.tileLayer(mapTileUrl(), {
+                    maxZoom: 20, subdomains: 'abcd',
+                    attribution: '&copy; OpenStreetMap contributors &copy; CARTO'
+                }).addTo(window.gisMap);
+            }
+        }
+        (function initTheme(){
+            const saved = localStorage.getItem('apawTheme');
+            const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+            applyTheme(saved || (prefersDark ? 'dark' : 'light'));
+        })();
         let currentNode = "{{ active }}";
 
         function fmtTime(){
@@ -776,12 +858,31 @@ DASHBOARD_HTML = """
                 dots;
         }
 
-        function camCardHTML(nid){
+        let camOrder = null;
+        function getCamOrder(){
+            if (camOrder) return camOrder;
+            try {
+                const saved = JSON.parse(localStorage.getItem('apawCamOrder'));
+                if (saved && Array.isArray(saved) && saved.length === Object.keys(CAM_NODES).length) {
+                    camOrder = saved;
+                    return camOrder;
+                }
+            } catch(e){}
+            camOrder = Object.keys(CAM_NODES);
+            return camOrder;
+        }
+        function saveCamOrder(order){
+            camOrder = order;
+            localStorage.setItem('apawCamOrder', JSON.stringify(order));
+        }
+
+        function camCardHTML(nid, draggableMode){
             const label = CAM_NODES[nid] || 'CAM';
-            return '<div class="cam-card">' +
+            const dragAttr = draggableMode ? ' draggable="true"' : '';
+            return '<div class="cam-card" data-nid="' + nid + '"' + dragAttr + '>' +
                 '<div class="rec"><span class="d"></span>REC</div>' +
                 '<div class="frame"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/><path d="M2 2l20 20"/></svg></div>' +
-                '<div class="meta"><div class="name">' + label + ' — ' + NODE_META[nid].label + '</div><div class="sub">Feed placeholder · no camera hardware in this build</div></div>' +
+                '<div class="meta"><div class="name">' + label + ' — ' + NODE_META[nid].label + '</div><div class="sub">Feed placeholder · no camera hardware in this build' + (draggableMode ? ' · drag to rearrange · double-tap to expand' : ' · double-tap to expand') + '</div></div>' +
                 '</div>';
         }
 
@@ -790,14 +891,73 @@ DASHBOARD_HTML = """
             const sub = document.getElementById('cam-panel-sub');
             if (nid === 'main'){
                 container.className = 'cam-container grid-mode';
-                sub.textContent = 'All 4 nodes';
-                container.innerHTML = Object.keys(CAM_NODES).map(camCardHTML).join('');
+                sub.textContent = 'All 4 nodes — drag to rearrange';
+                container.innerHTML = getCamOrder().map(n => camCardHTML(n, true)).join('');
             } else {
                 container.className = 'cam-container';
                 sub.textContent = NODE_META[nid].label;
-                container.innerHTML = camCardHTML(nid);
+                container.innerHTML = camCardHTML(nid, false);
             }
         }
+
+        // ---- Drag-to-rearrange (grid mode only) ----
+        let dragSrcNid = null;
+        (function setupCamDragAndDrop(){
+            const container = document.getElementById('cam-container');
+            container.addEventListener('dragstart', (e) => {
+                const card = e.target.closest('.cam-card');
+                if (!card) return;
+                dragSrcNid = card.dataset.nid;
+                e.dataTransfer.effectAllowed = 'move';
+            });
+            container.addEventListener('dragover', (e) => {
+                if (e.target.closest('.cam-card')) e.preventDefault();
+            });
+            container.addEventListener('drop', (e) => {
+                const targetCard = e.target.closest('.cam-card');
+                if (!targetCard || !dragSrcNid) return;
+                e.preventDefault();
+                const targetNid = targetCard.dataset.nid;
+                if (targetNid === dragSrcNid) return;
+                const order = getCamOrder().slice();
+                const from = order.indexOf(dragSrcNid);
+                const to = order.indexOf(targetNid);
+                order.splice(from, 1);
+                order.splice(to, 0, dragSrcNid);
+                saveCamOrder(order);
+                if (currentNode === 'main') renderCameras('main');
+                dragSrcNid = null;
+            });
+
+            // ---- Double-tap / double-click to expand ----
+            let lastCamTap = 0;
+            function handleCamExpandTrigger(e){
+                const card = e.target.closest('.cam-card');
+                if (!card) return;
+                openCamModal(card.dataset.nid);
+            }
+            container.addEventListener('dblclick', handleCamExpandTrigger);
+            container.addEventListener('touchend', (e) => {
+                const now = Date.now();
+                if (now - lastCamTap < 350) handleCamExpandTrigger(e);
+                lastCamTap = now;
+            });
+        })();
+
+        function openCamModal(nid){
+            const modal = document.getElementById('cam-modal');
+            const label = CAM_NODES[nid] || 'CAM';
+            document.getElementById('cam-modal-body').innerHTML =
+                '<div class="cam-modal-frame"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/><path d="M2 2l20 20"/></svg></div>' +
+                '<div class="cam-modal-meta"><div class="rec"><span class="d"></span>REC</div><h3>' + label + ' — ' + NODE_META[nid].label + '</h3><p>' + NODE_META[nid].desc + '</p><p class="cam-modal-note">Feed placeholder — no camera hardware wired into this build yet.</p></div>';
+            modal.style.display = 'flex';
+        }
+        function closeCamModal(){
+            document.getElementById('cam-modal').style.display = 'none';
+        }
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') closeCamModal();
+        });
 
         function renderAIPrediction(pred){
             const panel = document.getElementById('ai-prediction');
@@ -878,10 +1038,17 @@ DASHBOARD_HTML = """
 
         const CAM_NODES = { "inflow_a": "CAM 1", "inflow_b": "CAM 2", "inflow_c": "CAM 3", "outflow": "CAM 4" };
 
+        function mapTileUrl(){
+            const isDark = document.documentElement.getAttribute('data-theme') !== 'light';
+            return isDark
+                ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
+                : 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';
+        }
+
         function initGisMap(){
             const map = L.map('gis-map', { zoomControl: true, attributionControl: true }).setView([{{ hq.lat }}, {{ hq.lng }}], 15);
             window.gisMap = map;
-            L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+            window.gisTileLayer = L.tileLayer(mapTileUrl(), {
                 maxZoom: 20,
                 subdomains: 'abcd',
                 attribution: '&copy; OpenStreetMap contributors &copy; CARTO'
@@ -1219,6 +1386,7 @@ CONTROLS_HTML = """
         .panel a{ display:block; text-align:center; padding:16px; border-radius:10px; font-weight:600; color:var(--text); text-decoration:none; margin-bottom:14px; font-family:'Space Grotesk',sans-serif; letter-spacing:0.3px; border:1px solid var(--line); font-size:1.02em; }
         .panel a:last-of-type{ margin-bottom:0; }
         .sim-normal{ background:rgba(63,185,133,0.12); color:var(--green); border-color:rgba(63,185,133,0.3); }
+        .sim-moderate{ background:rgba(245,158,11,0.14); color:#f5a623; border-color:rgba(245,158,11,0.35); }
         .sim-storm{ background:rgba(225,75,75,0.14); color:#ff8f8f; border-color:rgba(225,75,75,0.3); }
         .note{ color:var(--mute); font-size:0.8em; line-height:1.55; margin-top:20px; }
         .back{ display:inline-block; margin-top:22px; color:var(--mute); font-size:0.85em; text-decoration:none; font-family:'IBM Plex Mono',monospace; }
@@ -1232,6 +1400,7 @@ CONTROLS_HTML = """
         <p class="lede">Trigger a weather-mode change here to drive the live dashboard on the main screen. Keep this tab on your own device during the demo.</p>
         <div class="panel">
             <a href="/set_mode/normal" class="sim-normal">Simulate normal weather</a>
+            <a href="/set_mode/moderate" class="sim-moderate">Simulate moderate risk</a>
             <a href="/set_mode/storm" class="sim-storm">Simulate flood alarm</a>
             <div class="note">These switches drive the mock sensor loop across all 4 nodes for demonstration only — the production build reads live readings from each ESP32's water-level, flow, and rain-gauge sensors.</div>
         </div>
@@ -1357,7 +1526,7 @@ def reject_report(report_id):
 @app.route('/set_mode/<mode_type>')
 def set_mode(mode_type):
     global SIMULATION_MODE
-    if mode_type in ['normal', 'storm']: SIMULATION_MODE = mode_type
+    if mode_type in ['normal', 'moderate', 'storm']: SIMULATION_MODE = mode_type
     return redirect(url_for('dashboard'))
 
 # ==============================================================================
