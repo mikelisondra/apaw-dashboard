@@ -31,196 +31,267 @@ SIMULATION_MODE = "normal"
 HISTORY_LEN = 12
 METRICS = ["water_level", "water_flow", "rainfall", "temperature", "humidity"]
 
-# NOTE — lat/lng below are placeholders centered on Brgy. Mambog IV, Bacoor,
-# Cavite (approx. 14.4228, 120.9617) with small offsets standing in for the
-# 4 node directions. Replace with your actual surveyed GPS coordinates once
-# the ESP32 nodes are physically sited.
+# ==============================================================================
+# NODE ARCHITECTURE — UPDATED SPEC (replaces the old 4-node + Main model)
+# ------------------------------------------------------------------------------
+#   Node 1 — Inflow:  ESP + water sensor at the flood entry point
+#   Node 2 — Outflow: ESP + water sensor at the flood catchment/pooling area
+#   Node 3 — Rain Gauge: ESP + tipping bucket on the Barangay Hall roof
+#   Hub — Raspberry Pi at the Barangay Hall (hosts this app + edge AI model)
+#
+# CRITICAL ADVISER RULE: node data is NEVER averaged or combined into one
+# flood-risk number. There is intentionally no "Main"/aggregate tab anymore —
+# every water reading, tier, and alert is computed and shown per node only.
+# The only place multiple nodes' figures ever appear together is hardware
+# diagnostics (is each device online), which is a connectivity summary, not
+# a water-level blend.
+#
+# lat/lng are placeholders centered on Brgy. Mambog IV, Bacoor, Cavite —
+# swap in real surveyed GPS once the ESP units are physically sited.
 NODE_META = {
-    "inflow_a": {"label": "Inflow A", "desc": "Upstream Creek — Purok 1", "kind": "inflow", "x": 15, "y": 20, "lat": 14.4250, "lng": 120.9592},
-    "inflow_b": {"label": "Inflow B", "desc": "Upstream Canal — Purok 3", "kind": "inflow", "x": 15, "y": 80, "lat": 14.4206, "lng": 120.9592},
-    "inflow_c": {"label": "Inflow C", "desc": "Storm Drain — Access Rd.", "kind": "inflow", "x": 48, "y": 10, "lat": 14.4256, "lng": 120.9622},
-    "outflow":  {"label": "Outflow",  "desc": "Main Drainage Exit",       "kind": "outflow", "x": 87, "y": 50, "lat": 14.4223, "lng": 120.9652},
+    "node1": {"label": "Inflow Area", "short": "Node 1", "kind": "inflow",
+              "desc": "Flood entry point", "device": "esp1", "lat": 14.4250, "lng": 120.9592},
+    "node2": {"label": "Outflow / Catchment Area", "short": "Node 2", "kind": "outflow",
+              "desc": "Flood pooling area", "device": "esp2", "lat": 14.4223, "lng": 120.9652},
 }
-NODE_ORDER = ["inflow_a", "inflow_b", "inflow_c", "outflow"]
-HQ_META = {"label": "Barangay HQ", "desc": "Brgy. Mambog IV Hall", "x": 48, "y": 50, "lat": 14.4228, "lng": 120.9617}
-
-MAIN_META = {"label": "Main Dashboard", "desc": "All 4 nodes combined", "kind": "overview"}
-ALL_TABS = ["main"] + NODE_ORDER
+NODE_ORDER = ["node1", "node2"]
+ALL_TABS = list(NODE_ORDER)          # kept for template compatibility — no "main" entry
 ALL_META = dict(NODE_META)
-ALL_META["main"] = MAIN_META
 
-TIER_COLOR = {"high": "#e14b4b", "medium": "#f59e0b", "low": "#eab308"}
-TIER_LABEL = {"high": "HIGH", "medium": "MEDIUM", "low": "LOW"}
-RISK_THRESHOLDS = {"medium": 1.0, "high": 2.0}
+RAIN_META = {"label": "Rain Gauge", "short": "Node 3", "kind": "rain",
+             "desc": "Barangay Hall roof", "device": "esp3", "lat": 14.4232, "lng": 120.9617}
+HQ_META = {"label": "Raspberry Pi Hub", "desc": "Brgy. Mambog IV Hall", "lat": 14.4228, "lng": 120.9617}
+
+# PAGASA-aligned tiers. No "green" — PAGASA's own rainfall-signal system
+# only defines Yellow/Orange/Red; "none" is its own neutral no-warning
+# state, not a manufactured 4th color.
+TIER_ORDER = ["none", "yellow", "orange", "red"]
+TIER_THRESHOLDS = {"yellow": 0.5, "orange": 1.0, "red": 1.8}  # meters
+TIER_COLOR = {"none": "#3fb985", "yellow": "#F4C430", "orange": "#F2994A", "red": "#E14B4B"}
+TIER_LABEL = {"none": "NONE", "yellow": "YELLOW", "orange": "ORANGE", "red": "RED"}
+HEADLINE = {"none": "All clear", "yellow": "Monitor", "orange": "Alert", "red": "Evacuate"}
+RISK_LABEL = {"none": "Safe", "yellow": "Monitor", "orange": "Alert", "red": "Evacuate"}  # resident-facing
 
 resident_reports = []
-data_source = {node_id: "simulated" for node_id in NODE_ORDER}
-_real_overrides = {}  # node_id -> reading dict, applied by the webhook this session
-_last_real_update = {node_id: 0.0 for node_id in NODE_ORDER}
-REAL_DATA_GRACE_SECONDS = 30
+
+HARDWARE = {
+    "esp1": {"kind": "esp", "label": "ESP — Node 1 (Inflow)", "status": "online", "battery_pct": 96.0},
+    "esp2": {"kind": "esp", "label": "ESP — Node 2 (Outflow)", "status": "online", "battery_pct": 94.0},
+    "esp3": {"kind": "esp", "label": "ESP — Node 3 (Rain Gauge)", "status": "online", "battery_pct": 99.0},
+    "pi":   {"kind": "pi", "label": "Raspberry Pi Hub", "status": "online"},
+}
+_forced_tier = {"node1": "none", "node2": "none"}
+_forced_hw = {"esp1": None, "esp2": None, "esp3": None, "pi": None}  # None = auto
+
+event_log = []       # most-recent-first when displayed
+_last_tier_seen = {"node1": "none", "node2": "none"}
+_last_hw_seen = {"esp1": "online", "esp2": "online", "esp3": "online", "pi": "online"}
+telemetry_buffer = []
+TELEMETRY_BUFFER_LEN = 2000
+
+def log_event(level, msg):
+    event_log.append({"ts": datetime.now().strftime("%H:%M:%S"), "level": level, "msg": msg})
+    if len(event_log) > 300:
+        del event_log[0]
 
 def risk_tier(level):
-    if level >= RISK_THRESHOLDS["high"]:
-        return "high"
-    elif level >= RISK_THRESHOLDS["medium"]:
-        return "medium"
-    return "low"
+    if level >= TIER_THRESHOLDS["red"]:
+        return "red"
+    if level >= TIER_THRESHOLDS["orange"]:
+        return "orange"
+    if level >= TIER_THRESHOLDS["yellow"]:
+        return "yellow"
+    return "none"
 
-NODE_SEED = {"inflow_a": 1, "inflow_b": 7, "inflow_c": 13, "outflow": 21}
+NODE_SEED = {"node1": 1, "node2": 13}
 
 def synth_reading(node_id, tick_offset=0):
-    """Deterministic pseudo-live reading from a smooth wave over time, so
-    numbers move tick to tick without needing persistent storage. If a
-    LoRaWAN webhook posted real data for this node recently, that takes
-    precedence instead (same override behavior as the Pi build)."""
-    import time as _time
-    if node_id in _real_overrides and (_time.time() - _last_real_update.get(node_id, 0)) < REAL_DATA_GRACE_SECONDS:
-        return dict(_real_overrides[node_id])
-
+    """Deterministic pseudo-live reading from a smooth wave over time, kept
+    within whichever tier band is currently forced for this node (via
+    presenter controls) — no persistent thread needed, which matters since
+    this runs as a stateless Vercel function as well as locally."""
     seed = NODE_SEED[node_id]
     t = (datetime.now().timestamp() / 3.0) - tick_offset + seed
     wobble = (math.sin(t * 0.6) + 1) / 2  # 0..1
+    tier = _forced_tier[node_id]
+    ranges = {"none": (0.1, 0.4), "yellow": (0.5, 0.9), "orange": (1.0, 1.7), "red": (1.8, 2.5)}
+    lo, hi = ranges[tier]
+    level = round(lo + wobble * (hi - lo), 2)
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    if SIMULATION_MODE == "normal":
-        return {
-            "risk_level": "Normal",
-            "confidence": round(96 + wobble * 3, 1),
-            "water_level": round(0.3 + wobble * 0.4, 2),
-            "water_flow": round(1.0 + wobble * 2.5, 2),
-            "rainfall": round(wobble * 2.0, 1),
-            "temperature": round(28.0 + wobble * 3.0, 1),
-            "humidity": round(70.0 + wobble * 10.0, 1),
-            "timestamp": now
-        }
-    elif SIMULATION_MODE == "moderate":
-        return {
-            "risk_level": "Normal",
-            "confidence": round(93 + wobble * 4, 1),
-            "water_level": round(1.2 + wobble * 0.6, 2),
-            "water_flow": round(5.0 + wobble * 4.0, 2),
-            "rainfall": round(10.0 + wobble * 12.0, 1),
-            "temperature": round(26.0 + wobble * 2.5, 1),
-            "humidity": round(82.0 + wobble * 8.0, 1),
-            "timestamp": now
-        }
-    else:
-        return {
-            "risk_level": "Critical",
-            "confidence": round(91 + wobble * 5, 1),
-            "water_level": round(2.8 + wobble * 0.8, 2),
-            "water_flow": round(12.0 + wobble * 6.5, 2),
-            "rainfall": round(35.0 + wobble * 30.0, 1),
-            "temperature": round(23.0 + wobble * 2.5, 1),
-            "humidity": round(92.0 + wobble * 6.0, 1),
-            "timestamp": now
-        }
-
-def current_node_status():
-    return {nid: synth_reading(nid) for nid in NODE_ORDER}
+    return {"water_level": level, "tier": risk_tier(level), "timestamp": now}
 
 def node_history(node_id):
-    return {m: [synth_reading(node_id, tick_offset=i)[m] for i in range(HISTORY_LEN-1, -1, -1)] for m in METRICS}
+    return {"water_level": [synth_reading(node_id, tick_offset=i)["water_level"] for i in range(HISTORY_LEN-1, -1, -1)]}
 
 def node_history_times_fmt(node_id):
     now = datetime.now()
     return [(now - timedelta(seconds=i*3)).strftime("%H:%M:%S") for i in range(HISTORY_LEN-1, -1, -1)]
 
-def eta_minutes_to_high(node_id):
+def eta_minutes_to_red(node_id):
+    """Rule-based placeholder for the edge-AI classifier's own prediction —
+    extrapolates from this node's OWN recent trend only. Swap for your
+    trained model's output; keep node isolation intact when you do."""
     levels = node_history(node_id)["water_level"]
     if len(levels) < 4:
         return None
     recent = levels[-4:]
     diffs = [recent[i+1] - recent[i] for i in range(len(recent)-1)]
-    avg_rate_per_tick = sum(diffs) / len(diffs)
+    avg_rate = sum(diffs) / len(diffs)
     current = levels[-1]
-    threshold = RISK_THRESHOLDS["high"]
+    threshold = TIER_THRESHOLDS["red"]
     if current >= threshold:
         return 0
-    if avg_rate_per_tick <= 0.001:
+    if avg_rate <= 0.001:
         return None
     remaining = threshold - current
-    seconds_needed = (remaining / avg_rate_per_tick) * 3
+    seconds_needed = (remaining / avg_rate) * 3
     return round(seconds_needed / 60, 1)
 
-def compute_main_aggregate(node_status):
-    levels = [node_status[n]["water_level"] for n in NODE_ORDER]
-    flows = [node_status[n]["water_flow"] for n in NODE_ORDER]
-    rains = [node_status[n]["rainfall"] for n in NODE_ORDER]
-    temps = [node_status[n]["temperature"] for n in NODE_ORDER]
-    hums = [node_status[n]["humidity"] for n in NODE_ORDER]
-    confs = [node_status[n]["confidence"] for n in NODE_ORDER]
-    worst_level = max(levels)
-    tier = risk_tier(worst_level)
+def ai_confidence_for(tier):
+    """Placeholder for the trained edge-AI classifier's own reported
+    confidence. Steady-state/fully-flooded reads as decisive; the
+    transitional bands (Yellow/Orange) are inherently more uncertain."""
+    seed = (int(datetime.now().timestamp()) // 3) % 100
+    if tier in ("none", "red"):
+        return round(87 + (seed % 12), 1)
+    return round(58 + (seed % 23), 1)
+
+def current_node_status():
+    return {nid: synth_reading(nid) for nid in NODE_ORDER}
+
+def synth_hw(dev_id):
+    """Synthetic hardware health, honoring forced overrides for demoing
+    fault conditions. No real background thread — computed per request."""
+    dev = dict(HARDWARE[dev_id])
+    forced = _forced_hw[dev_id]
+    t = datetime.now().timestamp() / 5.0
+    wobble = (math.sin(t + hash(dev_id) % 7) + 1) / 2
+    dev["status"] = forced if forced else "online"
+    if dev["kind"] == "esp":
+        dev["battery_pct"] = round(max(4.0, dev["battery_pct"] - wobble * 2), 1)
+        dev["latency_ms"] = round(20 + wobble * 40, 1)
+    else:
+        dev["cpu_pct"] = round(20 + wobble * 40, 1)
+        dev["mem_pct"] = round(35 + wobble * 30, 1)
+        dev["latency_ms"] = round(1 + wobble * 3, 1)
+    dev["last_heartbeat"] = datetime.now().strftime("%H:%M:%S") if dev["status"] != "offline" else "—"
+    return dev
+
+def current_hardware():
+    return {dev_id: synth_hw(dev_id) for dev_id in HARDWARE}
+
+def synth_rain():
+    t = datetime.now().timestamp() / 7.0
+    wobble = (math.sin(t) + 1) / 2
+    intensity = round(wobble * 22, 1)
+    return {"intensity": intensity, "today_total": round(intensity * 3.2, 1),
+            "timestamp": datetime.now().strftime("%H:%M:%S")}
+
+def rain_label(intensity):
+    if intensity <= 0.1:
+        return "No rain right now"
+    if intensity < 5:
+        return "Light rain falling"
+    if intensity < 15:
+        return "Moderate rain falling"
+    return "Heavy rain falling now"
+
+def rain_history():
+    return [round(((math.sin((datetime.now().timestamp()/7.0) - i) + 1) / 2) * 22, 1) for i in range(HISTORY_LEN-1, -1, -1)]
+
+def track_transitions_and_log():
+    """Detects tier/hardware changes between polls and appends to the event
+    log — the stateless equivalent of a background thread's continuous
+    monitoring. Runs once per /api/status call."""
+    for nid in NODE_ORDER:
+        tier = risk_tier(synth_reading(nid)["water_level"])
+        if tier != _last_tier_seen[nid]:
+            sev = {"none": 0, "yellow": 1, "orange": 2, "red": 3}
+            level = "WARN" if sev[tier] in (1, 2) else ("ERROR" if tier == "red" else "INFO")
+            log_event(level, NODE_META[nid]["short"] + " tier changed: " + _last_tier_seen[nid] + " -> " + tier)
+            _last_tier_seen[nid] = tier
+    for dev_id in HARDWARE:
+        status = synth_hw(dev_id)["status"]
+        if status != _last_hw_seen[dev_id]:
+            level = "ERROR" if status == "offline" else ("WARN" if status == "degraded" else "INFO")
+            log_event(level, HARDWARE[dev_id]["label"] + " status changed: " + _last_hw_seen[dev_id] + " -> " + status)
+            _last_hw_seen[dev_id] = status
+
+def append_telemetry_row():
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    for nid in NODE_ORDER:
+        s = synth_reading(nid)
+        telemetry_buffer.append({
+            "timestamp": ts, "node": NODE_META[nid]["short"], "water_level_m": s["water_level"],
+            "tier": s["tier"], "device": NODE_META[nid]["device"],
+            "device_status": synth_hw(NODE_META[nid]["device"])["status"],
+        })
+    r = synth_rain()
+    telemetry_buffer.append({
+        "timestamp": ts, "node": "Node 3", "water_level_m": "", "tier": "",
+        "rain_mm_hr": r["intensity"], "device": "esp3", "device_status": synth_hw("esp3")["status"],
+    })
+    if len(telemetry_buffer) > TELEMETRY_BUFFER_LEN:
+        del telemetry_buffer[:len(telemetry_buffer) - TELEMETRY_BUFFER_LEN]
+
+def compute_ai_prediction(nid):
+    """Rule-based placeholder for this NODE's edge-AI flood prediction —
+    deliberately not blended with the other node. Swap for your trained
+    classifier's output; keep the same shape."""
+    tier = risk_tier(synth_reading(nid)["water_level"])
+    eta = eta_minutes_to_red(nid)
+    label = NODE_META[nid]["label"]
+    if tier == "red":
+        narrative = "Flooding is happening now at " + label + "."
+    elif eta is None:
+        narrative = "Levels are steady at " + label + " — no significant rise predicted."
+    elif eta < 1:
+        narrative = "Levels at " + label + " are very close to flood stage — watch closely."
+    else:
+        narrative = "At this rate, flooding at " + label + " is expected in about " + str(round(eta)) + " minutes."
+    score = {"none": 15, "yellow": 45, "orange": 70, "red": 90}[tier]
+    return {"risk_score": score, "tier": tier, "narrative": narrative, "eta_minutes": eta}
+
+def compute_actions_copy():
     return {
-        "risk_level": "Critical" if tier == "high" else "Normal",
-        "confidence": round(sum(confs) / len(confs), 1),
-        "water_level": round(worst_level, 2),
-        "water_flow": round(sum(flows), 2),
-        "rainfall": round(sum(rains) / len(rains), 1),
-        "temperature": round(sum(temps) / len(temps), 1),
-        "humidity": round(sum(hums) / len(hums), 1),
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        "none":   ["Normal lang ang lahat — walang kailangang gawin.", "Bumalik na lang mamaya para sa update."],
+        "yellow": ["Iwasan muna ang mababang bahagi malapit sa lugar na ito.", "I-check ulit ang app paminsan-minsan."],
+        "orange": ["Ihanda ang go-bag at importanteng gamit.", "Ilipat ang mga gamit sa mas mataas na lugar.", "Maging handa na lumikas kung kinakailangan."],
+        "red":    ["LUMIKAS NA papunta sa evacuation center ng barangay.", "Huwag tumawid sa baha, kahit mababaw ito.", "Tumawag sa barangay kung kailangan ng tulong."],
     }
 
-def main_history():
-    """Aggregate history series for the Main tab's trend chart/sparklines,
-    built the same way as the live snapshot but across the 12 recent ticks."""
-    out = {m: [] for m in METRICS}
-    for i in range(HISTORY_LEN-1, -1, -1):
-        levels, flows, rains, temps, hums = [], [], [], [], []
-        for nid in NODE_ORDER:
-            r = synth_reading(nid, tick_offset=i)
-            levels.append(r["water_level"]); flows.append(r["water_flow"])
-            rains.append(r["rainfall"]); temps.append(r["temperature"]); hums.append(r["humidity"])
-        out["water_level"].append(round(max(levels), 2))
-        out["water_flow"].append(round(sum(flows), 2))
-        out["rainfall"].append(round(sum(rains) / len(rains), 1))
-        out["temperature"].append(round(sum(temps) / len(temps), 1))
-        out["humidity"].append(round(sum(hums) / len(hums), 1))
-    return out
+LAYMAN_COPY_TL = {
+    "node1": {
+        "none":   "Walang problema sa tubig malapit sa pasukan ng baha ngayon.",
+        "yellow": "Nagsisimulang tumaas ang tubig malapit sa pasukan ng baha.",
+        "orange": "Papalapit na sa baha ang tubig sa pasukan. Maghanda na.",
+        "red":    "Bumabaha na sa pasukan ng barangay. Lumikas agad papuntang mataas na lugar.",
+    },
+    "node2": {
+        "none":   "Walang problema sa tubig sa lugar ng kolektahan/outflow ngayon.",
+        "yellow": "Nagsisimulang mag-ipon ang tubig sa lugar ng kolektahan.",
+        "orange": "Mabilis na nag-iipon ang tubig sa kolektahan — posibleng bumaha.",
+        "red":    "Bumabaha na sa lugar ng kolektahan. Lumikas agad papuntang mataas na lugar.",
+    },
+}
 
-def current_status():
-    status = current_node_status()
-    status["main"] = compute_main_aggregate(status)
-    return status
+def outlook_for(node_id, tier):
+    if tier == "red":
+        return "Nangyayari na ang pagbaha — huwag nang maghintay pa."
+    eta = eta_minutes_to_red(node_id)
+    if eta is None:
+        return "Matatag ang lagay ng tubig — walang malaking pagbabago."
+    if eta < 10:
+        return "Mabilis tumataas ang tubig — manatiling alerto."
+    return "Unti-unting tumataas ang tubig sa lugar na ito."
 
-def get_history(node_id):
-    return main_history() if node_id == "main" else node_history(node_id)
-
-def compute_ai_prediction(status):
-    tier = risk_tier(status["main"]["water_level"])
-    etas = [eta_minutes_to_high(n) for n in NODE_ORDER]
-    etas_valid = [e for e in etas if e is not None]
-    soonest_eta = min(etas_valid) if etas_valid else None
-    worst_node = max(NODE_ORDER, key=lambda n: status[n]["water_level"])
-
-    if tier == "high":
-        score = 90
-        label = "HIGH — Flooding Likely"
-        narrative = "Water levels at " + NODE_META[worst_node]["label"] + " have crossed the critical threshold. Flooding is likely imminent in the affected drainage path."
-    elif tier == "medium":
-        score = 55 if soonest_eta is None or soonest_eta > 20 else 70
-        label = "MEDIUM — Monitor Closely"
-        eta_txt = (str(round(soonest_eta)) + " minutes") if soonest_eta is not None else "an unspecified time frame"
-        narrative = "Rising trend detected at " + NODE_META[worst_node]["label"] + ". Projected to reach critical levels in approximately " + eta_txt + " if the current rate continues."
-    else:
-        score = 15
-        label = "LOW — Nominal"
-        narrative = "All 4 nodes are within normal operating range. No elevated flood risk detected."
-
-    return {"risk_score": score, "label": label, "narrative": narrative, "eta_minutes": soonest_eta, "worst_node": worst_node}
-
-def synth_alerts(status):
-    alerts = []
-    for nid in NODE_ORDER:
-        tier = risk_tier(status[nid]["water_level"])
-        if tier == "high":
-            alerts.append({"time": datetime.now().strftime("%I:%M %p"), "color": TIER_COLOR["high"],
-                            "text": "Flood risk level is HIGH at " + NODE_META[nid]["label"]})
-        elif tier == "medium":
-            alerts.append({"time": datetime.now().strftime("%I:%M %p"), "color": TIER_COLOR["medium"],
-                            "text": "Water levels approaching warning threshold at " + NODE_META[nid]["label"]})
-    return alerts[:6]
+EMERGENCY_CONTACTS = [
+    {"name": "Barangay Hall (Apaw Response)", "number": "0912-345-6789", "note": "Main hotline"},
+    {"name": "Bureau of Fire Protection", "number": "0912-000-1111", "note": "Fire / rescue"},
+    {"name": "PNP — Local Police", "number": "0912-000-2222", "note": "Police assistance"},
+    {"name": "MDRRMO / Rescue", "number": "0912-000-3333", "note": "Disaster response"},
+]
+# NOTE: placeholder numbers — swap in the barangay's real hotlines before deployment.
 
 DASHBOARD_HTML = """
 <!DOCTYPE html>
