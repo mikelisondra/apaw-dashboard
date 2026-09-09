@@ -966,10 +966,12 @@ DASHBOARD_HTML = """
                 '<div class="meta">' +
                 '<div class="name">' + NODE_META[nid].label + ' camera</div>' +
                 '<div class="sub">Last capture: ' + lastCap + ' · ' + count + ' request(s)<br>No physical camera wired into this build yet — this exercises the real request/response flow.</div>' +
-                '<button class="cam-btn" id="cam-request-btn" onclick="requestSnapshot(\'' + nid + '\')" ' + (online ? '' : 'disabled') + '>' +
+                '<button class="cam-btn" id="cam-request-btn" data-nid="' + nid + '" ' + (online ? '' : 'disabled') + '>' +
                 (online ? 'Request Snapshot' : 'Device offline') +
                 '</button>' +
                 '</div></div>';
+            const btn = document.getElementById('cam-request-btn');
+            if (btn) btn.addEventListener('click', () => requestSnapshot(btn.dataset.nid));
         }
 
         function renderHardwareGrid(hw){
