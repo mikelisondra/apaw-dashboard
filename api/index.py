@@ -545,23 +545,34 @@ RESEARCHER_HTML = """<!DOCTYPE html>
         /* ---------- PARAM ROW ---------- */
         .param-row{ display:grid; grid-template-columns:repeat(5, 1fr); gap:14px; margin-bottom:14px; }
         .param-row-secondary{ display:grid; grid-template-columns:repeat(4, 1fr) 1.1fr; gap:12px; margin-bottom:22px; }
-        .pcard{ background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px 18px; }
+        .pcard{ background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px 18px; box-shadow:0 1px 2px rgba(0,0,0,0.03); }
         .pcard .head{ display:flex; align-items:center; gap:7px; color:var(--mute); font-size:0.78em; font-weight:600; letter-spacing:0.3px; margin-bottom:10px; text-transform:uppercase; }
         .pcard .head svg{ width:14px; height:14px; }
-        .pcard .value{ font-family:'Space Grotesk',sans-serif; font-weight:700; font-size:1.9em; line-height:1; }
+        .pcard .value{ font-family:'Space Grotesk',sans-serif; font-weight:700; font-size:2.05em; line-height:1; }
         .pcard .value .unit{ font-size:0.5em; color:var(--mute); font-weight:500; margin-left:3px; }
         .pcard .range{ font-size:0.74em; color:var(--mute); margin-top:4px; }
         .pcard .spark{ width:100%; height:34px; margin-top:10px; display:block; }
         .c-level .head{ color:var(--blue); } .c-rain .head{ color:var(--cyan); } .c-temp .head{ color:var(--orange); }
         .c-hum .head{ color:var(--violet); } .c-flow .head{ color:var(--teal); }
         /* ---------- SECONDARY PARAM ROW (risk tier / AI / ETA / battery / rain gauge) ---------- */
-        .param-row-secondary .pcard{ padding:13px 16px; }
-        .param-row-secondary .pcard .value{ font-size:1.5em; }
+        .param-row-secondary .pcard{ padding:12px 16px; opacity:0.92; box-shadow:none; }
+        .param-row-secondary .pcard .value{ font-size:1.3em; }
+        .param-row-secondary .pcard .head{ font-size:0.72em; }
         .c-tier .head{ color:var(--red); } .c-conf .head{ color:var(--green); }
         .c-eta .head{ color:var(--amber); } .c-batt .head{ color:var(--blue); }
 
         .legend-card{ background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px 18px; }
         .legend-card h4{ margin:0 0 12px 0; font-size:0.78em; color:var(--mute); text-transform:uppercase; letter-spacing:0.3px; font-weight:600; }
+
+        /* ---------- INFO ICON / HOVER TOOLTIP (for de-cluttering secondary notes) ---------- */
+        .info-icon{ position:relative; display:inline-flex; align-items:center; justify-content:center; width:15px; height:15px; border-radius:50%; border:1px solid var(--mute); color:var(--mute); font-size:0.68em; font-family:Georgia,serif; font-style:italic; font-weight:400; cursor:default; margin-left:6px; flex-shrink:0; vertical-align:middle; text-transform:none; letter-spacing:0; }
+        .info-icon:hover, .info-icon:focus{ border-color:var(--blue); color:var(--blue); }
+        .info-icon .tooltip{ visibility:hidden; opacity:0; position:absolute; top:130%; left:50%; transform:translateX(-50%); width:250px; background:var(--navy); color:#fff; font-size:0.82em; font-style:normal; font-weight:400; line-height:1.5; padding:9px 11px; border-radius:8px; transition:opacity 0.15s ease; z-index:30; pointer-events:none; text-align:left; }
+        .info-icon:first-child .tooltip, h3 .info-icon .tooltip, h4 .info-icon .tooltip{ left:0; transform:none; }
+        .info-icon:hover .tooltip, .info-icon:focus .tooltip{ visibility:visible; opacity:1; }
+
+        /* ---------- SECTION LABELS (clarify primary vs secondary param rows) ---------- */
+        .row-label{ font-size:0.74em; font-weight:700; text-transform:uppercase; letter-spacing:0.6px; color:var(--mute); margin-bottom:8px; }
         .legend-row{ display:flex; align-items:center; gap:9px; font-size:0.84em; margin-bottom:8px; color:var(--ink); }
         .legend-row .sw{ width:11px; height:11px; border-radius:3px; flex-shrink:0; }
         .legend-row.nodes .sw{ border-radius:50%; background:var(--blue); width:9px; height:9px; }
@@ -581,7 +592,6 @@ RESEARCHER_HTML = """<!DOCTYPE html>
         .ai-text{ flex:1; min-width:220px; }
         .ai-label{ font-family:'Space Grotesk',sans-serif; font-weight:700; font-size:1.05em; margin-bottom:6px; }
         .ai-narrative{ color:var(--ink); font-size:0.9em; margin-bottom:8px; line-height:1.5; }
-        .ai-caveat{ color:var(--mute); font-size:0.74em; line-height:1.5; }
 
         /* ---------- MIDDLE GRID ---------- */
         .mid-grid{ display:grid; grid-template-columns:1.4fr 1fr 1.1fr; gap:16px; margin-bottom:16px; align-items:start; }
@@ -754,6 +764,7 @@ RESEARCHER_HTML = """<!DOCTYPE html>
             <span id="strobe-text">—</span>
         </div>
 
+        <div class="row-label">Live Readings — the 5 tracked parameters</div>
         <div class="param-row">
             <div class="pcard c-level">
                 <div class="head"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2s6 7 6 11a6 6 0 11-12 0c0-4 6-11 6-11z"/></svg>Water Level</div>
@@ -787,6 +798,7 @@ RESEARCHER_HTML = """<!DOCTYPE html>
             </div>
         </div>
 
+        <div class="row-label" style="margin-top:4px;">System &amp; Risk Diagnostics</div>
         <div class="param-row-secondary">
             <div class="pcard pcard-sm c-tier">
                 <div class="head"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>Risk Tier</div>
@@ -809,7 +821,7 @@ RESEARCHER_HTML = """<!DOCTYPE html>
                 <div class="range" id="batt-caption">ESP node battery</div>
             </div>
             <div class="legend-card">
-                <h4>Node 3 — Barangay Hall <span style="font-weight:500;color:var(--mute);">(always shown)</span></h4>
+                <h4>Node 3 — Barangay Hall<span class="info-icon" tabindex="0">i<span class="tooltip">This rain gauge reading is always shown, no matter which area (Node 1 or Node 2) is selected above.</span></span></h4>
                 <div class="value" id="val-rain-gauge" style="font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:1.5em;">—<span class="unit" style="font-size:0.5em;color:var(--mute);"> mm/hr</span></div>
                 <div class="range" id="rain-gauge-caption">—</div>
             </div>
@@ -825,7 +837,7 @@ RESEARCHER_HTML = """<!DOCTYPE html>
         </div>
 
         <div class="panel" id="ai-prediction">
-            <h3>AI Flood Prediction <span class="sub" id="ai-sub">rule-based placeholder</span></h3>
+            <h3>AI Flood Prediction<span class="info-icon" tabindex="0">i<span class="tooltip">This score is a rule-based heuristic using this node’s own risk tier and predicted time-to-flooding only — never blended with the other node. Not a trained model output yet.</span></span></h3>
             <div class="ai-body">
                 <div class="ai-score-ring">
                     <svg viewBox="0 0 100 100">
@@ -837,7 +849,6 @@ RESEARCHER_HTML = """<!DOCTYPE html>
                 <div class="ai-text">
                     <div class="ai-label" id="ai-label">—</div>
                     <div class="ai-narrative" id="ai-narrative">—</div>
-                    <div class="ai-caveat">This score is a rule-based heuristic using this node's own risk tier and predicted time-to-flooding only — never blended with the other node. Not a trained model output. Swap in your Edge-AI classifier's result here; the panel expects {risk_score, label, narrative}.</div>
                 </div>
             </div>
         </div>
@@ -884,13 +895,12 @@ RESEARCHER_HTML = """<!DOCTYPE html>
             </div>
 
             <div class="panel">
-                <h3>Quick Actions</h3>
+                <h3>Quick Actions<span class="info-icon" tabindex="0">i<span class="tooltip">No SMS in this build. Medium risk auto-triggers a spoken warning + strobe light. High risk auto-triggers the alarm siren instead. These buttons are for testing/demo only.</span></span></h3>
                 <div class="qa-grid">
                     <button class="qa-btn qa-1" onclick="testVoiceAnnouncement()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 010 7"/><path d="M18.5 5.5a9 9 0 010 13"/></svg>Test Voice Announcement</button>
                     <button class="qa-btn qa-2" onclick="testSiren()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10v4a1 1 0 001 1h3l5 4V5L7 9H4a1 1 0 00-1 1z"/><path d="M16 8a5 5 0 010 8"/></svg>Test Alarm Siren</button>
                     <button class="qa-btn qa-3" onclick="testStrobe()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M4.2 4.2l2.2 2.2M17.6 17.6l2.2 2.2M2 12h3M19 12h3M4.2 19.8l2.2-2.2M17.6 6.4l2.2-2.2"/></svg>Test Strobe Light</button>
                     <a class="qa-btn qa-4" href="/api/export.csv" style="text-decoration:none;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 3H6a2 2 0 00-2 2v14a2 2 0 002 2h12a2 2 0 002-2V9z"/><path d="M14 3v6h6"/></svg>Export Telemetry CSV</a>
-                    <div class="qa-note">No SMS in this build. Medium risk auto-triggers a spoken warning announcement (predicted flood time) + strobe light. High risk auto-triggers the alarm siren instead of a message. Buttons above are for testing/demo only — production build wires them to the Pi's TTS engine, amplifier/speaker, and GPIO relays.</div>
                 </div>
             </div>
         </div>
@@ -924,7 +934,7 @@ RESEARCHER_HTML = """<!DOCTYPE html>
         </div>
 
         <div class="panel" id="history">
-            <h3>History <span class="sub" id="history-node-label">{{ meta[active].label }} · recent readings</span></h3>
+            <h3>History <span class="sub" id="history-node-label">{{ meta[active].label }} · recent readings</span><span class="info-icon" tabindex="0">i<span class="tooltip">Showing the last 12 readings for the selected node, spaced at the interval above. Node 1 and Node 2 histories are never merged.</span></span></h3>
             <div class="hist-controls" style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
                 <label for="history-interval" style="font-size:0.82em; color:var(--mute); font-weight:600;">Show a reading every</label>
                 <select id="history-interval" onchange="onHistoryIntervalChange()" style="font-size:0.85em; padding:6px 10px; border-radius:8px; border:1px solid var(--line); background:var(--card2); color:var(--ink);">
@@ -940,15 +950,13 @@ RESEARCHER_HTML = """<!DOCTYPE html>
                     <tbody id="history-tbody"><tr><td colspan="3" class="empty-queue">Loading…</td></tr></tbody>
                 </table>
             </div>
-            <div class="qa-note" style="margin-top:10px;">Showing the last 12 readings for the selected node, spaced at the interval above — Node 1 and Node 2 histories are never merged. Full date-range filtering against long-term storage is planned but not wired up in this build.</div>
         </div>
 
         <div class="panel" id="system-status">
-            <h3>System Status <span class="sub">hardware diagnostics · ESP + Pi Hub</span></h3>
+            <h3>System Status <span class="sub">hardware diagnostics · ESP + Pi Hub</span><span class="info-icon" tabindex="0">i<span class="tooltip">This is connectivity/hardware health only (is each device online) — never a blended water-level figure. Water tiers above remain per-node.</span></span></h3>
             <div class="sys-grid" id="hw-grid">
                 <div class="empty-queue">Loading…</div>
             </div>
-            <div class="qa-note" style="margin-top:14px;">This is connectivity/hardware health only (is each device online) — never a blended water-level figure. Water tiers above remain per-node.</div>
         </div>
 
         <div class="panel" id="event-log">
@@ -1713,23 +1721,34 @@ BARANGAY_HTML = """<!DOCTYPE html>
         /* ---------- PARAM ROW ---------- */
         .param-row{ display:grid; grid-template-columns:repeat(5, 1fr); gap:14px; margin-bottom:14px; }
         .param-row-secondary{ display:grid; grid-template-columns:repeat(4, 1fr) 1.1fr; gap:12px; margin-bottom:22px; }
-        .pcard{ background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px 18px; }
+        .pcard{ background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px 18px; box-shadow:0 1px 2px rgba(0,0,0,0.03); }
         .pcard .head{ display:flex; align-items:center; gap:7px; color:var(--mute); font-size:0.78em; font-weight:600; letter-spacing:0.3px; margin-bottom:10px; text-transform:uppercase; }
         .pcard .head svg{ width:14px; height:14px; }
-        .pcard .value{ font-family:'Space Grotesk',sans-serif; font-weight:700; font-size:1.9em; line-height:1; }
+        .pcard .value{ font-family:'Space Grotesk',sans-serif; font-weight:700; font-size:2.05em; line-height:1; }
         .pcard .value .unit{ font-size:0.5em; color:var(--mute); font-weight:500; margin-left:3px; }
         .pcard .range{ font-size:0.74em; color:var(--mute); margin-top:4px; }
         .pcard .spark{ width:100%; height:34px; margin-top:10px; display:block; }
         .c-level .head{ color:var(--blue); } .c-rain .head{ color:var(--cyan); } .c-temp .head{ color:var(--orange); }
         .c-hum .head{ color:var(--violet); } .c-flow .head{ color:var(--teal); }
         /* ---------- SECONDARY PARAM ROW (risk tier / AI / ETA / battery / rain gauge) ---------- */
-        .param-row-secondary .pcard{ padding:13px 16px; }
-        .param-row-secondary .pcard .value{ font-size:1.5em; }
+        .param-row-secondary .pcard{ padding:12px 16px; opacity:0.92; box-shadow:none; }
+        .param-row-secondary .pcard .value{ font-size:1.3em; }
+        .param-row-secondary .pcard .head{ font-size:0.72em; }
         .c-tier .head{ color:var(--red); } .c-conf .head{ color:var(--green); }
         .c-eta .head{ color:var(--amber); } .c-batt .head{ color:var(--blue); }
 
         .legend-card{ background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px 18px; }
         .legend-card h4{ margin:0 0 12px 0; font-size:0.78em; color:var(--mute); text-transform:uppercase; letter-spacing:0.3px; font-weight:600; }
+
+        /* ---------- INFO ICON / HOVER TOOLTIP (for de-cluttering secondary notes) ---------- */
+        .info-icon{ position:relative; display:inline-flex; align-items:center; justify-content:center; width:15px; height:15px; border-radius:50%; border:1px solid var(--mute); color:var(--mute); font-size:0.68em; font-family:Georgia,serif; font-style:italic; font-weight:400; cursor:default; margin-left:6px; flex-shrink:0; vertical-align:middle; text-transform:none; letter-spacing:0; }
+        .info-icon:hover, .info-icon:focus{ border-color:var(--blue); color:var(--blue); }
+        .info-icon .tooltip{ visibility:hidden; opacity:0; position:absolute; top:130%; left:50%; transform:translateX(-50%); width:250px; background:var(--navy); color:#fff; font-size:0.82em; font-style:normal; font-weight:400; line-height:1.5; padding:9px 11px; border-radius:8px; transition:opacity 0.15s ease; z-index:30; pointer-events:none; text-align:left; }
+        .info-icon:first-child .tooltip, h3 .info-icon .tooltip, h4 .info-icon .tooltip{ left:0; transform:none; }
+        .info-icon:hover .tooltip, .info-icon:focus .tooltip{ visibility:visible; opacity:1; }
+
+        /* ---------- SECTION LABELS (clarify primary vs secondary param rows) ---------- */
+        .row-label{ font-size:0.74em; font-weight:700; text-transform:uppercase; letter-spacing:0.6px; color:var(--mute); margin-bottom:8px; }
         .legend-row{ display:flex; align-items:center; gap:9px; font-size:0.84em; margin-bottom:8px; color:var(--ink); }
         .legend-row .sw{ width:11px; height:11px; border-radius:3px; flex-shrink:0; }
         .legend-row.nodes .sw{ border-radius:50%; background:var(--blue); width:9px; height:9px; }
@@ -1749,7 +1768,6 @@ BARANGAY_HTML = """<!DOCTYPE html>
         .ai-text{ flex:1; min-width:220px; }
         .ai-label{ font-family:'Space Grotesk',sans-serif; font-weight:700; font-size:1.05em; margin-bottom:6px; }
         .ai-narrative{ color:var(--ink); font-size:0.9em; margin-bottom:8px; line-height:1.5; }
-        .ai-caveat{ color:var(--mute); font-size:0.74em; line-height:1.5; }
 
         /* ---------- MIDDLE GRID ---------- */
         .mid-grid{ display:grid; grid-template-columns:1.4fr 1fr 1.1fr; gap:16px; margin-bottom:16px; align-items:start; }
@@ -1900,6 +1918,7 @@ BARANGAY_HTML = """<!DOCTYPE html>
             <span id="strobe-text">—</span>
         </div>
 
+        <div class="row-label">Live Readings — the 5 tracked parameters</div>
         <div class="param-row">
             <div class="pcard c-level">
                 <div class="head"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2s6 7 6 11a6 6 0 11-12 0c0-4 6-11 6-11z"/></svg>Water Level</div>
@@ -1933,6 +1952,7 @@ BARANGAY_HTML = """<!DOCTYPE html>
             </div>
         </div>
 
+        <div class="row-label" style="margin-top:4px;">System &amp; Risk Diagnostics</div>
         <div class="param-row-secondary">
             <div class="pcard pcard-sm c-tier">
                 <div class="head"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>Risk Tier</div>
@@ -1955,7 +1975,7 @@ BARANGAY_HTML = """<!DOCTYPE html>
                 <div class="range" id="batt-caption">ESP node battery</div>
             </div>
             <div class="legend-card">
-                <h4>Node 3 — Barangay Hall <span style="font-weight:500;color:var(--mute);">(always shown)</span></h4>
+                <h4>Node 3 — Barangay Hall<span class="info-icon" tabindex="0">i<span class="tooltip">This rain gauge reading is always shown, no matter which area (Node 1 or Node 2) is selected above.</span></span></h4>
                 <div class="value" id="val-rain-gauge" style="font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:1.5em;">—<span class="unit" style="font-size:0.5em;color:var(--mute);"> mm/hr</span></div>
                 <div class="range" id="rain-gauge-caption">—</div>
             </div>
@@ -1971,7 +1991,7 @@ BARANGAY_HTML = """<!DOCTYPE html>
         </div>
 
         <div class="panel" id="ai-prediction">
-            <h3>AI Flood Prediction <span class="sub" id="ai-sub">rule-based placeholder</span></h3>
+            <h3>AI Flood Prediction<span class="info-icon" tabindex="0">i<span class="tooltip">This score is a rule-based heuristic using this node’s own risk tier and predicted time-to-flooding only — never blended with the other node. Not a trained model output yet.</span></span></h3>
             <div class="ai-body">
                 <div class="ai-score-ring">
                     <svg viewBox="0 0 100 100">
@@ -1983,7 +2003,6 @@ BARANGAY_HTML = """<!DOCTYPE html>
                 <div class="ai-text">
                     <div class="ai-label" id="ai-label">—</div>
                     <div class="ai-narrative" id="ai-narrative">—</div>
-                    <div class="ai-caveat">This score is a rule-based heuristic using this node's own risk tier and predicted time-to-flooding only — never blended with the other node. Not a trained model output. Swap in your Edge-AI classifier's result here; the panel expects {risk_score, label, narrative}.</div>
                 </div>
             </div>
         </div>
@@ -2030,13 +2049,12 @@ BARANGAY_HTML = """<!DOCTYPE html>
             </div>
 
             <div class="panel">
-                <h3>Quick Actions</h3>
+                <h3>Quick Actions<span class="info-icon" tabindex="0">i<span class="tooltip">No SMS in this build. Medium risk auto-triggers a spoken warning + strobe light. High risk auto-triggers the alarm siren instead. These buttons are for testing/demo only.</span></span></h3>
                 <div class="qa-grid">
                     <button class="qa-btn qa-1" onclick="testVoiceAnnouncement()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 010 7"/><path d="M18.5 5.5a9 9 0 010 13"/></svg>Test Voice Announcement</button>
                     <button class="qa-btn qa-2" onclick="testSiren()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10v4a1 1 0 001 1h3l5 4V5L7 9H4a1 1 0 00-1 1z"/><path d="M16 8a5 5 0 010 8"/></svg>Test Alarm Siren</button>
                     <button class="qa-btn qa-3" onclick="testStrobe()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M4.2 4.2l2.2 2.2M17.6 17.6l2.2 2.2M2 12h3M19 12h3M4.2 19.8l2.2-2.2M17.6 6.4l2.2-2.2"/></svg>Test Strobe Light</button>
                     <a class="qa-btn qa-4" href="/api/export.csv" style="text-decoration:none;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 3H6a2 2 0 00-2 2v14a2 2 0 002 2h12a2 2 0 002-2V9z"/><path d="M14 3v6h6"/></svg>Export Telemetry CSV</a>
-                    <div class="qa-note">No SMS in this build. Medium risk auto-triggers a spoken warning announcement (predicted flood time) + strobe light. High risk auto-triggers the alarm siren instead of a message. Buttons above are for testing/demo only — production build wires them to the Pi's TTS engine, amplifier/speaker, and GPIO relays.</div>
                 </div>
             </div>
         </div>
@@ -2070,7 +2088,7 @@ BARANGAY_HTML = """<!DOCTYPE html>
         </div>
 
         <div class="panel" id="history">
-            <h3>History <span class="sub" id="history-node-label">{{ meta[active].label }} · recent readings</span></h3>
+            <h3>History <span class="sub" id="history-node-label">{{ meta[active].label }} · recent readings</span><span class="info-icon" tabindex="0">i<span class="tooltip">Showing the last 12 readings for the selected node, spaced at the interval above. Node 1 and Node 2 histories are never merged.</span></span></h3>
             <div class="hist-controls" style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
                 <label for="history-interval" style="font-size:0.82em; color:var(--mute); font-weight:600;">Show a reading every</label>
                 <select id="history-interval" onchange="onHistoryIntervalChange()" style="font-size:0.85em; padding:6px 10px; border-radius:8px; border:1px solid var(--line); background:var(--card2); color:var(--ink);">
@@ -2086,15 +2104,13 @@ BARANGAY_HTML = """<!DOCTYPE html>
                     <tbody id="history-tbody"><tr><td colspan="3" class="empty-queue">Loading…</td></tr></tbody>
                 </table>
             </div>
-            <div class="qa-note" style="margin-top:10px;">Showing the last 12 readings for the selected node, spaced at the interval above — Node 1 and Node 2 histories are never merged. Full date-range filtering against long-term storage is planned but not wired up in this build.</div>
         </div>
 
         <div class="panel" id="system-status">
-            <h3>System Status <span class="sub">hardware diagnostics · ESP + Pi Hub</span></h3>
+            <h3>System Status <span class="sub">hardware diagnostics · ESP + Pi Hub</span><span class="info-icon" tabindex="0">i<span class="tooltip">This is connectivity/hardware health only (is each device online) — never a blended water-level figure. Water tiers above remain per-node.</span></span></h3>
             <div class="sys-grid" id="hw-grid">
                 <div class="empty-queue">Loading…</div>
             </div>
-            <div class="qa-note" style="margin-top:14px;">This is connectivity/hardware health only (is each device online) — never a blended water-level figure. Water tiers above remain per-node.</div>
         </div>
 
         <div class="panel" id="event-log">
