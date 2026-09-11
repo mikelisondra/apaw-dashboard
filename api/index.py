@@ -3712,11 +3712,11 @@ LOGIN_HTML = """
         h1{ color:#fff; font-size:1.4em; margin:0; font-weight:700; }
 
         .info-icon{ position:relative; width:18px; height:18px; flex-shrink:0; border-radius:50%; border:1px solid rgba(255,255,255,0.6); color:#fff; font-size:0.72em; font-family:Georgia,serif; font-style:italic; display:flex; align-items:center; justify-content:center; cursor:default; }
-        .info-icon .tooltip{ visibility:hidden; opacity:0; position:absolute; top:130%; left:0; width:240px; background:#0f2438; color:#fff; font-size:0.78em; font-style:normal; font-weight:400; line-height:1.5; padding:10px 12px; border-radius:6px; transition:opacity 0.15s ease; z-index:10; }
+        .info-icon .tooltip{ visibility:hidden; opacity:0; position:absolute; top:130%; left:50%; transform:translateX(-50%); width:240px; max-width:calc(100vw - 48px); background:#0f2438; color:#fff; font-size:0.78em; font-style:normal; font-weight:400; line-height:1.5; padding:10px 12px; border-radius:6px; transition:opacity 0.15s ease; z-index:10; }
         .info-icon:hover .tooltip, .info-icon:focus .tooltip{ visibility:visible; opacity:1; }
 
         label{ display:block; color:#fff; font-size:0.82em; font-weight:600; margin-bottom:6px; }
-        input{ width:100%; padding:9px 2px; border:none; border-bottom:1px solid rgba(255,255,255,0.4); background:transparent; color:#fff; font-size:0.95em; margin-bottom:20px; font-family:'Inter',sans-serif; }
+        input{ width:100%; padding:9px 2px; border:none; border-bottom:1px solid rgba(255,255,255,0.4); background:transparent; color:#fff; font-size:16px; margin-bottom:20px; font-family:'Inter',sans-serif; }
         input::placeholder{ color:rgba(255,255,255,0.6); }
         input:focus{ outline:none; border-bottom-color:#2e6fd6; }
 
@@ -3729,10 +3729,19 @@ LOGIN_HTML = """
 
         @media (max-width:720px){
             .split{ flex-direction:column; }
-            .side{ flex:0 0 auto; padding:28px 20px; }
-            .side img{ width:130px; height:130px; }
-            .panel{ padding:32px 24px; }
+            .side{ flex:0 0 auto; padding:28px 20px 16px; }
+            .side img{ width:110px; height:110px; }
+            .panel{ padding:28px 20px 40px; align-items:flex-start; }
+            .box{ max-width:100%; margin:0 auto; }
+            .heading-row{ margin-bottom:20px; }
             .seam{ display:none; }
+        }
+
+        @media (max-width:400px){
+            .side{ padding:20px 16px 10px; }
+            .side img{ width:88px; height:88px; }
+            h1{ font-size:1.25em; }
+            .panel{ padding:24px 16px 32px; }
         }
     </style>
 </head>
