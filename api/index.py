@@ -167,7 +167,16 @@ def synth_reading(node_id, tick_offset=0):
     """Deterministic pseudo-live reading from a smooth wave over time, kept
     within whichever tier band is currently forced for this node (via
     presenter controls) — no persistent thread needed, which matters since
-    this runs as a stateless Vercel function as well as locally."""
+    this runs as a stateless Vercel function as well as locally.
+
+    Besides water_level (used to derive the risk tier), this also
+    synthesizes the other three MAIN sensor parameters this thesis
+    tracks per node — water_flow, humidity, and temperature — each on
+    its own independent wave/phase so they don't just mirror the water
+    level. Swap these three for real ESP32 sensor reads once wired in;
+    keep the same dict keys so nothing downstream (API payload, both
+    dashboards) needs to change.
+    """
     seed = NODE_SEED[node_id]
     t = (datetime.now().timestamp() / 3.0) - tick_offset + seed
     wobble = (math.sin(t * 0.6) + 1) / 2  # 0..1
@@ -175,11 +184,39 @@ def synth_reading(node_id, tick_offset=0):
     ranges = {"none": (0.1, 0.4), "yellow": (0.5, 0.9), "orange": (1.0, 1.7), "red": (1.8, 2.5)}
     lo, hi = ranges[tier]
     level = round(lo + wobble * (hi - lo), 2)
+
+    # Water flow (L/min) — rises with the same general trend as the water
+    # level (more flow during higher tiers) but on its own phase offset.
+    flow_wobble = (math.sin(t * 0.6 + 1.1) + 1) / 2
+    flow_lo, flow_hi = (5, 30) if tier in ("none", "yellow") else (25, 75)
+    water_flow = round(flow_lo + flow_wobble * (flow_hi - flow_lo), 1)
+
+    # Ambient humidity (%RH) — independent slower wave.
+    hum_wobble = (math.sin(t * 0.35 + 2.4) + 1) / 2
+    humidity = round(55 + hum_wobble * 40, 1)
+
+    # Ambient temperature (°C) — independent slower wave.
+    temp_wobble = (math.sin(t * 0.22 + 0.7) + 1) / 2
+    temperature = round(24 + temp_wobble * 7, 1)
+
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    return {"water_level": level, "tier": risk_tier(level), "timestamp": now}
+    return {
+        "water_level": level,
+        "water_flow": water_flow,
+        "humidity": humidity,
+        "temperature": temperature,
+        "tier": risk_tier(level),
+        "timestamp": now,
+    }
 
 def node_history(node_id):
-    return {"water_level": [synth_reading(node_id, tick_offset=i)["water_level"] for i in range(HISTORY_LEN-1, -1, -1)]}
+    readings = [synth_reading(node_id, tick_offset=i) for i in range(HISTORY_LEN-1, -1, -1)]
+    return {
+        "water_level": [r["water_level"] for r in readings],
+        "water_flow": [r["water_flow"] for r in readings],
+        "humidity": [r["humidity"] for r in readings],
+        "temperature": [r["temperature"] for r in readings],
+    }
 
 def node_history_times_fmt(node_id):
     now = datetime.now()
@@ -433,7 +470,8 @@ RESEARCHER_HTML = """<!DOCTYPE html>
         @keyframes strobeFlash{ 0%,100%{ opacity:1; } 50%{ opacity:0.4; } }
 
         /* ---------- PARAM ROW ---------- */
-        .param-row{ display:grid; grid-template-columns:repeat(5, 1fr) 1.3fr; gap:14px; margin-bottom:22px; }
+        .param-row{ display:grid; grid-template-columns:repeat(5, 1fr); gap:14px; margin-bottom:14px; }
+        .param-row-secondary{ display:grid; grid-template-columns:repeat(4, 1fr) 1.1fr; gap:12px; margin-bottom:22px; }
         .pcard{ background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px 18px; }
         .pcard .head{ display:flex; align-items:center; gap:7px; color:var(--mute); font-size:0.78em; font-weight:600; letter-spacing:0.3px; margin-bottom:10px; text-transform:uppercase; }
         .pcard .head svg{ width:14px; height:14px; }
@@ -443,6 +481,11 @@ RESEARCHER_HTML = """<!DOCTYPE html>
         .pcard .spark{ width:100%; height:34px; margin-top:10px; display:block; }
         .c-level .head{ color:var(--blue); } .c-rain .head{ color:var(--cyan); } .c-temp .head{ color:var(--orange); }
         .c-hum .head{ color:var(--violet); } .c-flow .head{ color:var(--teal); }
+        /* ---------- SECONDARY PARAM ROW (risk tier / AI / ETA / battery / rain gauge) ---------- */
+        .param-row-secondary .pcard{ padding:13px 16px; }
+        .param-row-secondary .pcard .value{ font-size:1.5em; }
+        .c-tier .head{ color:var(--red); } .c-conf .head{ color:var(--green); }
+        .c-eta .head{ color:var(--amber); } .c-batt .head{ color:var(--blue); }
 
         .legend-card{ background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px 18px; }
         .legend-card h4{ margin:0 0 12px 0; font-size:0.78em; color:var(--mute); text-transform:uppercase; letter-spacing:0.3px; font-weight:600; }
@@ -580,8 +623,8 @@ RESEARCHER_HTML = """<!DOCTYPE html>
         .sys-metric .m-label{ color:var(--mute); font-size:0.75em; text-transform:uppercase; margin-bottom:6px; }
         .sys-metric .m-val{ font-family:'IBM Plex Mono',monospace; font-weight:700; font-size:1.3em; }
 
-        @media (max-width:1100px){ .param-row{ grid-template-columns:repeat(3,1fr); } .mid-grid{ grid-template-columns:1fr; } .bottom-grid{ grid-template-columns:1fr; } }
-        @media (max-width:700px){ .sidebar{ display:none; } .param-row{ grid-template-columns:repeat(2,1fr); } }
+        @media (max-width:1100px){ .param-row,.param-row-secondary{ grid-template-columns:repeat(3,1fr); } .mid-grid{ grid-template-columns:1fr; } .bottom-grid{ grid-template-columns:1fr; } }
+        @media (max-width:700px){ .sidebar{ display:none; } .param-row,.param-row-secondary{ grid-template-columns:repeat(2,1fr); } }
     </style>
 </head>
 <body>
@@ -639,22 +682,49 @@ RESEARCHER_HTML = """<!DOCTYPE html>
                 <div class="range">Thresholds: 0.5 / 1.0 / 1.8 m</div>
                 <svg class="spark" id="spark-level" viewBox="0 0 100 34" preserveAspectRatio="none"></svg>
             </div>
+            <div class="pcard c-flow">
+                <div class="head"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 15c2-4 4-4 6 0s4 4 6 0 4-4 6 0"/><path d="M4 9c2-4 4-4 6 0s4 4 6 0 4-4 6 0"/></svg>Water Flow</div>
+                <div class="value" id="val-flow">{{ status[active].water_flow }}<span class="unit">L/min</span></div>
+                <div class="range">Inflow / outflow rate</div>
+                <svg class="spark" id="spark-flow" viewBox="0 0 100 34" preserveAspectRatio="none"></svg>
+            </div>
+            <div class="pcard c-hum">
+                <div class="head"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3c-3 4-6 7.5-6 11a6 6 0 0012 0c0-3.5-3-7-6-11z"/></svg>Humidity</div>
+                <div class="value" id="val-humidity">{{ status[active].humidity }}<span class="unit">%</span></div>
+                <div class="range">Relative humidity</div>
+                <svg class="spark" id="spark-humidity" viewBox="0 0 100 34" preserveAspectRatio="none"></svg>
+            </div>
             <div class="pcard c-temp">
+                <div class="head"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 14.76V3.5a2.5 2.5 0 00-5 0v11.26a4.5 4.5 0 105 0z"/></svg>Temperature</div>
+                <div class="value" id="val-temp">{{ status[active].temperature }}<span class="unit">°C</span></div>
+                <div class="range">Ambient temperature</div>
+                <svg class="spark" id="spark-temp" viewBox="0 0 100 34" preserveAspectRatio="none"></svg>
+            </div>
+            <div class="pcard c-rain">
+                <div class="head"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 15a5 5 0 000-10 6 6 0 00-11.3 2A4.5 4.5 0 007 15h10z"/><path d="M8 19l-1 2M12 19l-1 2M16 19l-1 2"/></svg>Rain Intensity</div>
+                <div class="value" id="val-rain-intensity">{{ rain.intensity }}<span class="unit">mm/hr</span></div>
+                <div class="range" id="rain-intensity-caption">{{ rain.label }}</div>
+                <svg class="spark" id="spark-rain" viewBox="0 0 100 34" preserveAspectRatio="none"></svg>
+            </div>
+        </div>
+
+        <div class="param-row-secondary">
+            <div class="pcard pcard-sm c-tier">
                 <div class="head"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>Risk Tier</div>
                 <div class="value" id="val-tier">{{ status[active].tier | upper }}</div>
                 <div class="range" id="tier-caption">PAGASA-aligned</div>
             </div>
-            <div class="pcard c-hum">
+            <div class="pcard pcard-sm c-conf">
                 <div class="head"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/></svg>AI Confidence</div>
                 <div class="value" id="val-conf">—<span class="unit">%</span></div>
                 <div class="range">Edge-AI classifier (placeholder)</div>
             </div>
-            <div class="pcard c-flow">
+            <div class="pcard pcard-sm c-eta">
                 <div class="head"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>Predicted ETA</div>
                 <div class="value" id="val-eta" style="font-size:1.3em;">—</div>
                 <div class="range">Time-to-Red, this node only</div>
             </div>
-            <div class="pcard c-rain">
+            <div class="pcard pcard-sm c-batt">
                 <div class="head"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="6" width="18" height="10" rx="2"/><line x1="23" y1="10" x2="23" y2="14"/></svg>Device Battery</div>
                 <div class="value" id="val-batt">—<span class="unit">%</span></div>
                 <div class="range" id="batt-caption">ESP node battery</div>
@@ -1048,13 +1118,22 @@ RESEARCHER_HTML = """<!DOCTYPE html>
             ).join('');
         }
 
-        function renderRainCard(rain){
+        function renderRainCard(rain, rainHistory){
             document.getElementById('val-rain-gauge').innerHTML = rain.intensity + '<span class="unit" style="font-size:0.5em;color:var(--mute);"> mm/hr</span>';
             document.getElementById('rain-gauge-caption').textContent = rain.label + ' · ' + rain.today_total + 'mm today';
+            const riVal = document.getElementById('val-rain-intensity');
+            if (riVal){
+                riVal.innerHTML = rain.intensity + '<span class="unit">mm/hr</span>';
+                document.getElementById('rain-intensity-caption').textContent = rain.label;
+                if (rainHistory && rainHistory.length) renderSpark('spark-rain', rainHistory, '#22b8cf');
+            }
         }
 
         function renderNode(nid, s, hist){
             document.getElementById('val-level').innerHTML = s.water_level + '<span class="unit">m</span>';
+            document.getElementById('val-flow').innerHTML = s.water_flow + '<span class="unit">L/min</span>';
+            document.getElementById('val-humidity').innerHTML = s.humidity + '<span class="unit">%</span>';
+            document.getElementById('val-temp').innerHTML = s.temperature + '<span class="unit">°C</span>';
             document.getElementById('val-tier').textContent = s.tier.toUpperCase();
             if (window.lastData){
                 document.getElementById('val-conf').innerHTML = window.lastData.ai_confidence[nid] + '<span class="unit">%</span>';
@@ -1070,6 +1149,9 @@ RESEARCHER_HTML = """<!DOCTYPE html>
             document.getElementById('trend-node-label').textContent = NODE_META[nid].label + ' · Last 12 readings';
 
             renderSpark('spark-level', hist.water_level, '#2e6fd6');
+            renderSpark('spark-flow', hist.water_flow, '#12b3a8');
+            renderSpark('spark-humidity', hist.humidity, '#7b6cf6');
+            renderSpark('spark-temp', hist.temperature, '#f2994a');
             const rains = (window.lastData && window.lastData.rain_history) || hist.water_level.map(()=>0);
             renderTrend(hist.water_level, rains);
             renderHistoryTable(nid, hist);
@@ -1286,7 +1368,7 @@ RESEARCHER_HTML = """<!DOCTYPE html>
                 });
                 checkAlertTransitions(data);
                 renderNode(currentNode, data.status[currentNode], data.history[currentNode]);
-                renderRainCard(data.rain);
+                renderRainCard(data.rain, data.rain_history);
                 renderHardwareGrid(data.hardware);
                 renderEventLog(data.log);
             } catch(e){ console.error('poll failed', e); }
@@ -1465,7 +1547,8 @@ BARANGAY_HTML = """<!DOCTYPE html>
         @keyframes strobeFlash{ 0%,100%{ opacity:1; } 50%{ opacity:0.4; } }
 
         /* ---------- PARAM ROW ---------- */
-        .param-row{ display:grid; grid-template-columns:repeat(5, 1fr) 1.3fr; gap:14px; margin-bottom:22px; }
+        .param-row{ display:grid; grid-template-columns:repeat(5, 1fr); gap:14px; margin-bottom:14px; }
+        .param-row-secondary{ display:grid; grid-template-columns:repeat(4, 1fr) 1.1fr; gap:12px; margin-bottom:22px; }
         .pcard{ background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px 18px; }
         .pcard .head{ display:flex; align-items:center; gap:7px; color:var(--mute); font-size:0.78em; font-weight:600; letter-spacing:0.3px; margin-bottom:10px; text-transform:uppercase; }
         .pcard .head svg{ width:14px; height:14px; }
@@ -1475,6 +1558,11 @@ BARANGAY_HTML = """<!DOCTYPE html>
         .pcard .spark{ width:100%; height:34px; margin-top:10px; display:block; }
         .c-level .head{ color:var(--blue); } .c-rain .head{ color:var(--cyan); } .c-temp .head{ color:var(--orange); }
         .c-hum .head{ color:var(--violet); } .c-flow .head{ color:var(--teal); }
+        /* ---------- SECONDARY PARAM ROW (risk tier / AI / ETA / battery / rain gauge) ---------- */
+        .param-row-secondary .pcard{ padding:13px 16px; }
+        .param-row-secondary .pcard .value{ font-size:1.5em; }
+        .c-tier .head{ color:var(--red); } .c-conf .head{ color:var(--green); }
+        .c-eta .head{ color:var(--amber); } .c-batt .head{ color:var(--blue); }
 
         .legend-card{ background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px 18px; }
         .legend-card h4{ margin:0 0 12px 0; font-size:0.78em; color:var(--mute); text-transform:uppercase; letter-spacing:0.3px; font-weight:600; }
@@ -1592,8 +1680,8 @@ BARANGAY_HTML = """<!DOCTYPE html>
         .lvl-INFO{ color:#5bb2e8; } .lvl-WARN{ color:#F4C430; } .lvl-ERROR{ color:#E14B4B; }
 
 
-        @media (max-width:1100px){ .param-row{ grid-template-columns:repeat(3,1fr); } .mid-grid{ grid-template-columns:1fr; } .bottom-grid{ grid-template-columns:1fr; } }
-        @media (max-width:700px){ .sidebar{ display:none; } .param-row{ grid-template-columns:repeat(2,1fr); } }
+        @media (max-width:1100px){ .param-row,.param-row-secondary{ grid-template-columns:repeat(3,1fr); } .mid-grid{ grid-template-columns:1fr; } .bottom-grid{ grid-template-columns:1fr; } }
+        @media (max-width:700px){ .sidebar{ display:none; } .param-row,.param-row-secondary{ grid-template-columns:repeat(2,1fr); } }
     </style>
 </head>
 <body>
@@ -1649,22 +1737,49 @@ BARANGAY_HTML = """<!DOCTYPE html>
                 <div class="range">Thresholds: 0.5 / 1.0 / 1.8 m</div>
                 <svg class="spark" id="spark-level" viewBox="0 0 100 34" preserveAspectRatio="none"></svg>
             </div>
+            <div class="pcard c-flow">
+                <div class="head"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 15c2-4 4-4 6 0s4 4 6 0 4-4 6 0"/><path d="M4 9c2-4 4-4 6 0s4 4 6 0 4-4 6 0"/></svg>Water Flow</div>
+                <div class="value" id="val-flow">{{ status[active].water_flow }}<span class="unit">L/min</span></div>
+                <div class="range">Inflow / outflow rate</div>
+                <svg class="spark" id="spark-flow" viewBox="0 0 100 34" preserveAspectRatio="none"></svg>
+            </div>
+            <div class="pcard c-hum">
+                <div class="head"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3c-3 4-6 7.5-6 11a6 6 0 0012 0c0-3.5-3-7-6-11z"/></svg>Humidity</div>
+                <div class="value" id="val-humidity">{{ status[active].humidity }}<span class="unit">%</span></div>
+                <div class="range">Relative humidity</div>
+                <svg class="spark" id="spark-humidity" viewBox="0 0 100 34" preserveAspectRatio="none"></svg>
+            </div>
             <div class="pcard c-temp">
+                <div class="head"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 14.76V3.5a2.5 2.5 0 00-5 0v11.26a4.5 4.5 0 105 0z"/></svg>Temperature</div>
+                <div class="value" id="val-temp">{{ status[active].temperature }}<span class="unit">°C</span></div>
+                <div class="range">Ambient temperature</div>
+                <svg class="spark" id="spark-temp" viewBox="0 0 100 34" preserveAspectRatio="none"></svg>
+            </div>
+            <div class="pcard c-rain">
+                <div class="head"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 15a5 5 0 000-10 6 6 0 00-11.3 2A4.5 4.5 0 007 15h10z"/><path d="M8 19l-1 2M12 19l-1 2M16 19l-1 2"/></svg>Rain Intensity</div>
+                <div class="value" id="val-rain-intensity">{{ rain.intensity }}<span class="unit">mm/hr</span></div>
+                <div class="range" id="rain-intensity-caption">{{ rain.label }}</div>
+                <svg class="spark" id="spark-rain" viewBox="0 0 100 34" preserveAspectRatio="none"></svg>
+            </div>
+        </div>
+
+        <div class="param-row-secondary">
+            <div class="pcard pcard-sm c-tier">
                 <div class="head"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>Risk Tier</div>
                 <div class="value" id="val-tier">{{ status[active].tier | upper }}</div>
                 <div class="range" id="tier-caption">PAGASA-aligned</div>
             </div>
-            <div class="pcard c-hum">
+            <div class="pcard pcard-sm c-conf">
                 <div class="head"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/></svg>AI Confidence</div>
                 <div class="value" id="val-conf">—<span class="unit">%</span></div>
                 <div class="range">Edge-AI classifier (placeholder)</div>
             </div>
-            <div class="pcard c-flow">
+            <div class="pcard pcard-sm c-eta">
                 <div class="head"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>Predicted ETA</div>
                 <div class="value" id="val-eta" style="font-size:1.3em;">—</div>
                 <div class="range">Time-to-Red, this node only</div>
             </div>
-            <div class="pcard c-rain">
+            <div class="pcard pcard-sm c-batt">
                 <div class="head"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="6" width="18" height="10" rx="2"/><line x1="23" y1="10" x2="23" y2="14"/></svg>Device Battery</div>
                 <div class="value" id="val-batt">—<span class="unit">%</span></div>
                 <div class="range" id="batt-caption">ESP node battery</div>
@@ -2003,13 +2118,22 @@ BARANGAY_HTML = """<!DOCTYPE html>
             ).join('');
         }
 
-        function renderRainCard(rain){
+        function renderRainCard(rain, rainHistory){
             document.getElementById('val-rain-gauge').innerHTML = rain.intensity + '<span class="unit" style="font-size:0.5em;color:var(--mute);"> mm/hr</span>';
             document.getElementById('rain-gauge-caption').textContent = rain.label + ' · ' + rain.today_total + 'mm today';
+            const riVal = document.getElementById('val-rain-intensity');
+            if (riVal){
+                riVal.innerHTML = rain.intensity + '<span class="unit">mm/hr</span>';
+                document.getElementById('rain-intensity-caption').textContent = rain.label;
+                if (rainHistory && rainHistory.length) renderSpark('spark-rain', rainHistory, '#22b8cf');
+            }
         }
 
         function renderNode(nid, s, hist){
             document.getElementById('val-level').innerHTML = s.water_level + '<span class="unit">m</span>';
+            document.getElementById('val-flow').innerHTML = s.water_flow + '<span class="unit">L/min</span>';
+            document.getElementById('val-humidity').innerHTML = s.humidity + '<span class="unit">%</span>';
+            document.getElementById('val-temp').innerHTML = s.temperature + '<span class="unit">°C</span>';
             document.getElementById('val-tier').textContent = s.tier.toUpperCase();
             if (window.lastData){
                 document.getElementById('val-conf').innerHTML = window.lastData.ai_confidence[nid] + '<span class="unit">%</span>';
@@ -2025,6 +2149,9 @@ BARANGAY_HTML = """<!DOCTYPE html>
             document.getElementById('trend-node-label').textContent = NODE_META[nid].label + ' · Last 12 readings';
 
             renderSpark('spark-level', hist.water_level, '#2e6fd6');
+            renderSpark('spark-flow', hist.water_flow, '#12b3a8');
+            renderSpark('spark-humidity', hist.humidity, '#7b6cf6');
+            renderSpark('spark-temp', hist.temperature, '#f2994a');
             const rains = (window.lastData && window.lastData.rain_history) || hist.water_level.map(()=>0);
             renderTrend(hist.water_level, rains);
             renderHistoryTable(nid, hist);
@@ -2241,7 +2368,7 @@ BARANGAY_HTML = """<!DOCTYPE html>
                 });
                 checkAlertTransitions(data);
                 renderNode(currentNode, data.status[currentNode], data.history[currentNode]);
-                renderRainCard(data.rain);
+                renderRainCard(data.rain, data.rain_history);
                 renderHardwareGrid(data.hardware);
                 renderEventLog(data.log);
             } catch(e){ console.error('poll failed', e); }
@@ -2795,42 +2922,71 @@ LOGIN_HTML = """
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Apaw — Sign In</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         *{ box-sizing:border-box; }
-        body{ margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; background:#0f1b2d; font-family:'Inter',sans-serif; padding:20px; }
-        .card{ background:#101e2e; border:1px solid #223349; border-radius:16px; padding:36px 32px; width:100%; max-width:380px; }
-        .brand{ display:flex; align-items:center; gap:10px; margin-bottom:24px; }
-        .brand img{ width:32px; height:32px; }
-        .brand span{ font-family:'Space Grotesk',sans-serif; font-weight:700; color:#fff; font-size:1.15em; }
-        h1{ color:#fff; font-size:1.2em; margin:0 0 6px; font-family:'Space Grotesk',sans-serif; }
-        p.sub{ color:#7c93aa; font-size:0.88em; margin:0 0 24px; line-height:1.5; }
-        label{ display:block; color:#c9d4e0; font-size:0.82em; font-weight:600; margin-bottom:6px; }
-        input{ width:100%; padding:11px 12px; border-radius:8px; border:1px solid #223349; background:#0b1622; color:#e8eef4; font-size:0.92em; margin-bottom:16px; font-family:'Inter',sans-serif; }
-        input:focus{ outline:none; border-color:#2e86c1; }
-        button{ width:100%; padding:12px; border-radius:8px; border:none; background:#2e86c1; color:#fff; font-weight:600; font-size:0.92em; cursor:pointer; font-family:'Inter',sans-serif; }
-        button:hover{ background:#2670a0; }
-        .error{ background:rgba(225,75,75,0.12); border:1px solid rgba(225,75,75,0.4); color:#ff8f8f; padding:10px 12px; border-radius:8px; font-size:0.85em; margin-bottom:16px; }
-        .foot{ margin-top:20px; text-align:center; font-size:0.78em; color:#5c7186; }
-        .foot a{ color:#5bb2e8; text-decoration:none; }
+        html,body{ margin:0; height:100%; font-family:'Inter',sans-serif; }
+        .split{ display:flex; min-height:100vh; }
+
+        .side{ flex:1 1 45%; background:#2e6fd6; display:flex; align-items:center; justify-content:center; padding:40px; }
+        .side img{ width:64px; height:64px; margin-bottom:18px; }
+        .side .name{ color:#fff; font-size:1.5em; font-weight:700; letter-spacing:0.5px; margin:0; }
+        .side .tag{ color:rgba(255,255,255,0.75); font-size:0.9em; margin:8px 0 0; text-align:center; max-width:280px; line-height:1.5; }
+
+        .panel{ flex:1 1 55%; display:flex; align-items:center; justify-content:center; padding:40px; background:#fff; }
+        .box{ width:100%; max-width:340px; }
+        h1{ color:#0f2438; font-size:1.4em; margin:0 0 6px; font-weight:700; }
+        p.sub{ color:#6b7c8f; font-size:0.88em; margin:0 0 28px; line-height:1.5; }
+        p.sub a{ color:#2e6fd6; text-decoration:none; }
+
+        label{ display:block; color:#0f2438; font-size:0.82em; font-weight:600; margin-bottom:6px; }
+        input{ width:100%; padding:9px 2px; border:none; border-bottom:1px solid #d7dee6; background:transparent; color:#0f2438; font-size:0.95em; margin-bottom:20px; font-family:'Inter',sans-serif; }
+        input:focus{ outline:none; border-bottom-color:#2e6fd6; }
+
+        button{ width:100%; padding:12px; border:none; background:#0f2438; color:#fff; font-weight:600; font-size:0.9em; cursor:pointer; font-family:'Inter',sans-serif; letter-spacing:0.3px; }
+        button:hover{ background:#193754; }
+
+        .error{ color:#c0392b; font-size:0.85em; margin-bottom:16px; }
+        .foot{ margin-top:24px; font-size:0.8em; color:#8a97a6; }
+        .foot a{ color:#2e6fd6; text-decoration:none; }
+
+        @media (max-width:720px){
+            .split{ flex-direction:column; }
+            .side{ flex:0 0 auto; padding:32px 20px; }
+            .side img{ width:44px; height:44px; margin-bottom:10px; }
+            .side .name{ font-size:1.2em; }
+            .side .tag{ display:none; }
+            .panel{ padding:32px 24px; }
+        }
     </style>
 </head>
 <body>
-    <div class="card">
-        <div class="brand"><img src="data:image/png;base64,{{ logo_b64 }}" alt="Apaw"><span>Apaw</span></div>
-        <h1>Sign in</h1>
-        <p class="sub">For barangay officials and the development team. Residents don't need an account — visit <a href="/resident" style="color:#5bb2e8;">the public view</a> instead.</p>
-        {% if error %}<div class="error">{{ error }}</div>{% endif %}
-        <form method="POST">
-            <label>Username</label>
-            <input type="text" name="username" autocomplete="username" required autofocus>
-            <label>Password</label>
-            <input type="password" name="password" autocomplete="current-password" required>
-            <button type="submit">Sign In</button>
-        </form>
-        <div class="foot">Public views — no login needed: <a href="/resident">Resident</a> · <a href="/tv">TV Display</a></div>
+    <div class="split">
+        <div class="side">
+            <div style="display:flex; flex-direction:column; align-items:center;">
+                <img src="data:image/png;base64,{{ logo_b64 }}" alt="Apaw">
+                <p class="name">Apaw</p>
+                <p class="tag">Automated flood monitoring and early-warning system for Brgy. Mambog IV, Bacoor, Cavite.</p>
+            </div>
+        </div>
+        <div class="panel">
+            <div class="box">
+                <h1>Sign in</h1>
+                <p class="sub">For barangay officials and the development team. Residents can use <a href="/resident">the public view</a> instead — no account needed.</p>
+                {% if error %}<div class="error">{{ error }}</div>{% endif %}
+                <form method="POST">
+                    <label>Username</label>
+                    <input type="text" name="username" autocomplete="username" required autofocus>
+                    <label>Password</label>
+                    <input type="password" name="password" autocomplete="current-password" required>
+                    <button type="submit">Sign In</button>
+                </form>
+                <div class="foot">No login needed: <a href="/resident">Resident view</a> · <a href="/tv">TV Display</a></div>
+            </div>
+        </div>
     </div>
 </body>
 </html>
@@ -2903,9 +3059,12 @@ def _dashboard_context():
         active = 'node1'
     status = current_node_status()
     tier_color_by_node = {nid: TIER_COLOR[status[nid]["tier"]] for nid in NODE_ORDER}
+    rain_now = synth_rain()
+    rain_now["label"] = rain_label(rain_now["intensity"])
     return dict(
         status=status,
         active=active,
+        rain=rain_now,
         meta=ALL_META,
         hq=HQ_META,
         rain_meta=RAIN_META,
