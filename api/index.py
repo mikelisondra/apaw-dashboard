@@ -665,6 +665,18 @@ RESEARCHER_HTML = """<!DOCTYPE html>
         .strobe-dot{ width:10px; height:10px; border-radius:50%; background:currentColor; flex-shrink:0; }
         @keyframes strobeFlash{ 0%,100%{ opacity:1; } 50%{ opacity:0.4; } }
 
+        /* ---------- NEW REPORT TOAST — pops in from the top when a resident submits a photo ---------- */
+        .report-toast{ position:fixed; top:-140px; left:50%; transform:translateX(-50%); z-index:9999; background:var(--navy); color:#fff; padding:12px 16px; border-radius:14px; box-shadow:0 10px 34px rgba(0,0,0,0.32); display:flex; align-items:center; gap:12px; max-width:380px; cursor:pointer; transition:top 0.45s cubic-bezier(.34,1.56,.64,1); }
+        .report-toast.show{ top:18px; }
+        .report-toast img{ width:48px; height:48px; object-fit:cover; border-radius:9px; flex-shrink:0; background:#22344a; }
+        .report-toast .rt-icon{ width:48px; height:48px; border-radius:9px; background:#22344a; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+        .report-toast .rt-icon svg{ width:22px; height:22px; }
+        .report-toast .rt-text{ display:flex; flex-direction:column; gap:2px; min-width:0; }
+        .report-toast .rt-title{ font-weight:700; font-size:0.9em; }
+        .report-toast .rt-sub{ font-size:0.78em; opacity:0.75; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .report-toast .rt-close{ margin-left:4px; background:none; border:none; color:#fff; opacity:0.6; cursor:pointer; font-size:1.15em; line-height:1; padding:4px; flex-shrink:0; }
+        .report-toast .rt-close:hover{ opacity:1; }
+
         /* ---------- PARAM ROW ---------- */
         .param-row{ display:grid; grid-template-columns:repeat(5, 1fr); gap:14px; margin-bottom:14px; }
         .param-row-secondary{ display:grid; grid-template-columns:repeat(4, 1fr) 1.1fr; gap:12px; margin-bottom:22px; }
@@ -885,6 +897,16 @@ RESEARCHER_HTML = """<!DOCTYPE html>
         <div class="strobe-banner" id="strobe-banner" style="display:none;">
             <span class="strobe-dot"></span>
             <span id="strobe-text">—</span>
+        </div>
+
+        <div class="report-toast" id="report-toast" onclick="dismissReportToast(true)">
+            <div class="rt-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h3l2-3h6l2 3h3a1 1 0 011 1v11a1 1 0 01-1 1H4a1 1 0 01-1-1V8a1 1 0 011-1z"/><circle cx="12" cy="13" r="3.5"/></svg></div>
+            <img id="report-toast-img" src="" alt="" style="display:none;">
+            <div class="rt-text">
+                <div class="rt-title">New photo report</div>
+                <div class="rt-sub" id="report-toast-sub">Loading…</div>
+            </div>
+            <button class="rt-close" onclick="event.stopPropagation(); dismissReportToast(false);" aria-label="Dismiss">&times;</button>
         </div>
 
         <div class="row-label" id="live-readings-label">Live Readings from {{ meta[active].label }} Node</div>
@@ -1591,6 +1613,53 @@ RESEARCHER_HTML = """<!DOCTYPE html>
         let lastTierByNode = {};
         const sirenAudio = new Audio('https://assets.mixkit.co/active_storage/sfx/991/991-preview.mp3');
 
+        // ============================================================
+        // NEW REPORT TOAST — pops a banner in from the top of the screen
+        // the moment a resident submits a photo report, so officials don't
+        // have to keep the Reports panel open to notice one came in.
+        // Starts from the highest report id already rendered on this page
+        // load (server-side), then only reacts to ids ABOVE that.
+        // ============================================================
+        let lastSeenReportId = {{ (reports[-1].id if reports else 0) }};
+        let reportToastTimer = null;
+
+        async function checkNewReports(data){
+            const latestId = data.reports_latest_id || 0;
+            if (latestId > lastSeenReportId){
+                const newId = latestId;
+                lastSeenReportId = latestId;
+                try{
+                    const res = await fetch('/api/report/' + newId);
+                    const rep = await res.json();
+                    showReportToast(rep);
+                } catch(e){ console.error('report fetch failed', e); }
+            }
+        }
+
+        function showReportToast(rep){
+            const toast = document.getElementById('report-toast');
+            const img = document.getElementById('report-toast-img');
+            const sub = document.getElementById('report-toast-sub');
+            if (rep.image_data){
+                img.src = 'data:image/jpeg;base64,' + rep.image_data;
+                img.style.display = 'block';
+                toast.querySelector('.rt-icon').style.display = 'none';
+            }
+            sub.textContent = (rep.node_label || 'Unspecified area') + ' · ' + rep.time + ' · tap to review';
+            toast.classList.add('show');
+            if (reportToastTimer) clearTimeout(reportToastTimer);
+            reportToastTimer = setTimeout(() => dismissReportToast(false), 9000);
+        }
+
+        function dismissReportToast(goToQueue){
+            document.getElementById('report-toast').classList.remove('show');
+            if (reportToastTimer) { clearTimeout(reportToastTimer); reportToastTimer = null; }
+            if (goToQueue) {
+                window.location.hash = '#queue';
+                window.location.reload();
+            }
+        }
+
         function mockAction(msg){
             alert(msg);
         }
@@ -1675,6 +1744,7 @@ RESEARCHER_HTML = """<!DOCTYPE html>
                     }
                 });
                 checkAlertTransitions(data);
+                checkNewReports(data);
                 renderNode(currentNode, data.status[currentNode], data.history[currentNode]);
                 renderRainCard(data.rain, data.rain_history);
                 renderHardwareGrid(data.hardware);
@@ -1877,6 +1947,18 @@ BARANGAY_HTML = """<!DOCTYPE html>
         .strobe-dot{ width:10px; height:10px; border-radius:50%; background:currentColor; flex-shrink:0; }
         @keyframes strobeFlash{ 0%,100%{ opacity:1; } 50%{ opacity:0.4; } }
 
+        /* ---------- NEW REPORT TOAST — pops in from the top when a resident submits a photo ---------- */
+        .report-toast{ position:fixed; top:-140px; left:50%; transform:translateX(-50%); z-index:9999; background:var(--navy); color:#fff; padding:12px 16px; border-radius:14px; box-shadow:0 10px 34px rgba(0,0,0,0.32); display:flex; align-items:center; gap:12px; max-width:380px; cursor:pointer; transition:top 0.45s cubic-bezier(.34,1.56,.64,1); }
+        .report-toast.show{ top:18px; }
+        .report-toast img{ width:48px; height:48px; object-fit:cover; border-radius:9px; flex-shrink:0; background:#22344a; }
+        .report-toast .rt-icon{ width:48px; height:48px; border-radius:9px; background:#22344a; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+        .report-toast .rt-icon svg{ width:22px; height:22px; }
+        .report-toast .rt-text{ display:flex; flex-direction:column; gap:2px; min-width:0; }
+        .report-toast .rt-title{ font-weight:700; font-size:0.9em; }
+        .report-toast .rt-sub{ font-size:0.78em; opacity:0.75; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .report-toast .rt-close{ margin-left:4px; background:none; border:none; color:#fff; opacity:0.6; cursor:pointer; font-size:1.15em; line-height:1; padding:4px; flex-shrink:0; }
+        .report-toast .rt-close:hover{ opacity:1; }
+
         /* ---------- PARAM ROW ---------- */
         .param-row{ display:grid; grid-template-columns:repeat(5, 1fr); gap:14px; margin-bottom:14px; }
         .param-row-secondary{ display:grid; grid-template-columns:repeat(4, 1fr) 1.1fr; gap:12px; margin-bottom:22px; }
@@ -2075,6 +2157,16 @@ BARANGAY_HTML = """<!DOCTYPE html>
         <div class="strobe-banner" id="strobe-banner" style="display:none;">
             <span class="strobe-dot"></span>
             <span id="strobe-text">—</span>
+        </div>
+
+        <div class="report-toast" id="report-toast" onclick="dismissReportToast(true)">
+            <div class="rt-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h3l2-3h6l2 3h3a1 1 0 011 1v11a1 1 0 01-1 1H4a1 1 0 01-1-1V8a1 1 0 011-1z"/><circle cx="12" cy="13" r="3.5"/></svg></div>
+            <img id="report-toast-img" src="" alt="" style="display:none;">
+            <div class="rt-text">
+                <div class="rt-title">New photo report</div>
+                <div class="rt-sub" id="report-toast-sub">Loading…</div>
+            </div>
+            <button class="rt-close" onclick="event.stopPropagation(); dismissReportToast(false);" aria-label="Dismiss">&times;</button>
         </div>
 
         <div class="row-label" id="live-readings-label">Live Readings from {{ meta[active].label }} Node</div>
@@ -2726,6 +2818,53 @@ BARANGAY_HTML = """<!DOCTYPE html>
         let lastTierByNode = {};
         const sirenAudio = new Audio('https://assets.mixkit.co/active_storage/sfx/991/991-preview.mp3');
 
+        // ============================================================
+        // NEW REPORT TOAST — pops a banner in from the top of the screen
+        // the moment a resident submits a photo report, so officials don't
+        // have to keep the Reports panel open to notice one came in.
+        // Starts from the highest report id already rendered on this page
+        // load (server-side), then only reacts to ids ABOVE that.
+        // ============================================================
+        let lastSeenReportId = {{ (reports[-1].id if reports else 0) }};
+        let reportToastTimer = null;
+
+        async function checkNewReports(data){
+            const latestId = data.reports_latest_id || 0;
+            if (latestId > lastSeenReportId){
+                const newId = latestId;
+                lastSeenReportId = latestId;
+                try{
+                    const res = await fetch('/api/report/' + newId);
+                    const rep = await res.json();
+                    showReportToast(rep);
+                } catch(e){ console.error('report fetch failed', e); }
+            }
+        }
+
+        function showReportToast(rep){
+            const toast = document.getElementById('report-toast');
+            const img = document.getElementById('report-toast-img');
+            const sub = document.getElementById('report-toast-sub');
+            if (rep.image_data){
+                img.src = 'data:image/jpeg;base64,' + rep.image_data;
+                img.style.display = 'block';
+                toast.querySelector('.rt-icon').style.display = 'none';
+            }
+            sub.textContent = (rep.node_label || 'Unspecified area') + ' · ' + rep.time + ' · tap to review';
+            toast.classList.add('show');
+            if (reportToastTimer) clearTimeout(reportToastTimer);
+            reportToastTimer = setTimeout(() => dismissReportToast(false), 9000);
+        }
+
+        function dismissReportToast(goToQueue){
+            document.getElementById('report-toast').classList.remove('show');
+            if (reportToastTimer) { clearTimeout(reportToastTimer); reportToastTimer = null; }
+            if (goToQueue) {
+                window.location.hash = '#queue';
+                window.location.reload();
+            }
+        }
+
         function mockAction(msg){
             alert(msg);
         }
@@ -2810,6 +2949,7 @@ BARANGAY_HTML = """<!DOCTYPE html>
                     }
                 });
                 checkAlertTransitions(data);
+                checkNewReports(data);
                 renderNode(currentNode, data.status[currentNode], data.history[currentNode]);
                 renderRainCard(data.rain, data.rain_history);
                 renderHardwareGrid(data.hardware);
@@ -3490,6 +3630,12 @@ def build_api_payload():
         "rain_history": rain_history(),
         "alerts": list(reversed(event_log[-6:])),
         "log": list(reversed(event_log[-60:])),
+        # Lightweight — no image bytes — so the 3s poll stays cheap. The
+        # dashboard compares reports_latest_id against the id it already
+        # knows about and only fetches the one new report's image (via
+        # /api/report/<id>) when this actually goes up.
+        "reports_latest_id": resident_reports[-1]["id"] if resident_reports else 0,
+        "reports_pending": sum(1 for r in resident_reports if r["status"] == "Pending"),
     }
 
 @app.route('/')
@@ -3683,6 +3829,23 @@ def upload_report():
                 "time": datetime.now().strftime("%H:%M:%S"), "status": "Pending"
             })
     return redirect(url_for('resident_portal'))
+
+@app.route('/api/report/<int:report_id>')
+@login_required(roles=['official', 'researcher'])
+def api_report_detail(report_id):
+    """Backs the new-report notification toast — fetched once, only when
+    reports_latest_id (from /api/status) goes up, so the image bytes don't
+    ride along on every 3s poll."""
+    for r in resident_reports:
+        if r['id'] == report_id:
+            return jsonify({
+                "id": r['id'],
+                "node": r['node'],
+                "node_label": NODE_META.get(r['node'], {}).get('label', 'Unspecified area'),
+                "time": r['time'],
+                "image_data": r['image_data'],
+            })
+    return jsonify({"error": "not found"}), 404
 
 @app.route('/verify/<int:report_id>')
 @login_required(roles=['official', 'researcher'])
