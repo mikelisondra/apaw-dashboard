@@ -3394,7 +3394,14 @@ LOGIN_HTML = """
         /* Soft seam between the two sides, instead of a hard vertical line. */
         .seam{ position:absolute; top:0; bottom:0; left:45%; width:6px; transform:translateX(-50%); background:linear-gradient(to right, #ffffff, #0f1b2d); pointer-events:none; z-index:1; }
 
-        .box{ width:100%; max-width:340px; }
+        .box{ width:100%; max-width:340px; animation: slideInFromRight 0.65s cubic-bezier(0.16, 1, 0.3, 1) both; }
+        @keyframes slideInFromRight{
+            from{ opacity:0; transform:translateX(70px); }
+            to{ opacity:1; transform:translateX(0); }
+        }
+        @media (prefers-reduced-motion: reduce){
+            .box{ animation:none; }
+        }
         .heading-row{ display:flex; align-items:center; gap:8px; margin-bottom:28px; }
         h1{ color:#fff; font-size:1.4em; margin:0; font-weight:700; }
 
