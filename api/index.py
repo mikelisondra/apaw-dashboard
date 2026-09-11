@@ -2929,18 +2929,22 @@ LOGIN_HTML = """
     <style>
         *{ box-sizing:border-box; }
         html,body{ margin:0; height:100%; font-family:'Inter',sans-serif; }
-        .split{ display:flex; min-height:100vh; }
+        .split{ display:flex; min-height:100vh; position:relative; }
 
-        .side{ flex:1 1 45%; background:#fff; display:flex; align-items:center; justify-content:center; padding:40px; }
-        .side img{ width:150px; height:150px; }
+        .side{ flex:1 1 45%; background:#fff; display:flex; align-items:center; justify-content:center; padding:40px; position:relative; }
+        .side img{ width:210px; height:210px; }
 
         .panel{
-            flex:1 1 55%; display:flex; align-items:center; justify-content:center; padding:40px;
+            flex:1 1 55%; display:flex; align-items:center; justify-content:center; padding:40px; position:relative;
             background-color:#0f1b2d;
             background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='70'%3E%3Cpath d='M0 46 Q35 18 70 46 T140 46' stroke='%232e6fd6' stroke-opacity='0.45' stroke-width='2' fill='none'/%3E%3Cpath d='M0 60 Q35 32 70 60 T140 60' stroke='%232e6fd6' stroke-opacity='0.25' stroke-width='2' fill='none'/%3E%3C/svg%3E");
             background-repeat:repeat;
             background-size:140px 70px;
         }
+
+        /* Soft seam between the two sides, instead of a hard vertical line. */
+        .seam{ position:absolute; top:0; bottom:0; left:45%; width:220px; transform:translateX(-50%); background:linear-gradient(to right, #ffffff, #0f1b2d); pointer-events:none; z-index:1; }
+
         .box{ width:100%; max-width:340px; }
         .heading-row{ display:flex; align-items:center; gap:8px; margin-bottom:28px; }
         h1{ color:#fff; font-size:1.4em; margin:0; font-weight:700; }
@@ -2964,8 +2968,9 @@ LOGIN_HTML = """
         @media (max-width:720px){
             .split{ flex-direction:column; }
             .side{ flex:0 0 auto; padding:28px 20px; }
-            .side img{ width:90px; height:90px; }
+            .side img{ width:130px; height:130px; }
             .panel{ padding:32px 24px; }
+            .seam{ display:none; }
         }
     </style>
 </head>
@@ -2974,6 +2979,7 @@ LOGIN_HTML = """
         <div class="side">
             <img src="data:image/png;base64,{{ logo_b64 }}" alt="Apaw">
         </div>
+        <div class="seam"></div>
         <div class="panel">
             <div class="box">
                 <div class="heading-row">
