@@ -2932,34 +2932,39 @@ LOGIN_HTML = """
         .split{ display:flex; min-height:100vh; }
 
         .side{ flex:1 1 45%; background:#fff; display:flex; align-items:center; justify-content:center; padding:40px; }
-        .side img{ width:64px; height:64px; margin-bottom:18px; }
-        .side .name{ color:#0f2438; font-size:1.5em; font-weight:700; letter-spacing:0.5px; margin:0; }
-        .side .tag{ color:#6b7c8f; font-size:0.9em; margin:8px 0 0; text-align:center; max-width:280px; line-height:1.5; }
+        .side img{ width:150px; height:150px; }
 
-        .panel{ flex:1 1 55%; display:flex; align-items:center; justify-content:center; padding:40px; background:#2e6fd6; }
+        .panel{
+            flex:1 1 55%; display:flex; align-items:center; justify-content:center; padding:40px;
+            background-color:#0f1b2d;
+            background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='70'%3E%3Cpath d='M0 46 Q35 18 70 46 T140 46' stroke='%232e6fd6' stroke-opacity='0.45' stroke-width='2' fill='none'/%3E%3Cpath d='M0 60 Q35 32 70 60 T140 60' stroke='%232e6fd6' stroke-opacity='0.25' stroke-width='2' fill='none'/%3E%3C/svg%3E");
+            background-repeat:repeat;
+            background-size:140px 70px;
+        }
         .box{ width:100%; max-width:340px; }
-        h1{ color:#fff; font-size:1.4em; margin:0 0 6px; font-weight:700; }
-        p.sub{ color:rgba(255,255,255,0.8); font-size:0.88em; margin:0 0 28px; line-height:1.5; }
-        p.sub a{ color:#fff; text-decoration:underline; }
+        .heading-row{ display:flex; align-items:center; gap:8px; margin-bottom:28px; }
+        h1{ color:#fff; font-size:1.4em; margin:0; font-weight:700; }
+
+        .info-icon{ position:relative; width:18px; height:18px; flex-shrink:0; border-radius:50%; border:1px solid rgba(255,255,255,0.6); color:#fff; font-size:0.72em; font-family:Georgia,serif; font-style:italic; display:flex; align-items:center; justify-content:center; cursor:default; }
+        .info-icon .tooltip{ visibility:hidden; opacity:0; position:absolute; top:130%; left:0; width:240px; background:#0f2438; color:#fff; font-size:0.78em; font-style:normal; font-weight:400; line-height:1.5; padding:10px 12px; border-radius:6px; transition:opacity 0.15s ease; z-index:10; }
+        .info-icon:hover .tooltip, .info-icon:focus .tooltip{ visibility:visible; opacity:1; }
 
         label{ display:block; color:#fff; font-size:0.82em; font-weight:600; margin-bottom:6px; }
         input{ width:100%; padding:9px 2px; border:none; border-bottom:1px solid rgba(255,255,255,0.4); background:transparent; color:#fff; font-size:0.95em; margin-bottom:20px; font-family:'Inter',sans-serif; }
         input::placeholder{ color:rgba(255,255,255,0.6); }
-        input:focus{ outline:none; border-bottom-color:#fff; }
+        input:focus{ outline:none; border-bottom-color:#2e6fd6; }
 
-        button{ width:100%; padding:12px; border:none; background:#fff; color:#2e6fd6; font-weight:600; font-size:0.9em; cursor:pointer; font-family:'Inter',sans-serif; letter-spacing:0.3px; }
-        button:hover{ background:#eaf1fd; }
+        button{ width:100%; padding:12px; border:none; background:#2e6fd6; color:#fff; font-weight:600; font-size:0.9em; cursor:pointer; font-family:'Inter',sans-serif; letter-spacing:0.3px; }
+        button:hover{ background:#2660bb; }
 
-        .error{ color:#ffe1e1; background:rgba(0,0,0,0.15); padding:8px 10px; font-size:0.85em; margin-bottom:16px; }
-        .foot{ margin-top:24px; font-size:0.8em; color:rgba(255,255,255,0.75); }
+        .error{ color:#ffe1e1; background:rgba(0,0,0,0.2); padding:8px 10px; font-size:0.85em; margin-bottom:16px; }
+        .foot{ margin-top:24px; font-size:0.8em; color:rgba(255,255,255,0.6); }
         .foot a{ color:#fff; text-decoration:underline; }
 
         @media (max-width:720px){
             .split{ flex-direction:column; }
-            .side{ flex:0 0 auto; padding:32px 20px; }
-            .side img{ width:44px; height:44px; margin-bottom:10px; }
-            .side .name{ font-size:1.2em; }
-            .side .tag{ display:none; }
+            .side{ flex:0 0 auto; padding:28px 20px; }
+            .side img{ width:90px; height:90px; }
             .panel{ padding:32px 24px; }
         }
     </style>
@@ -2967,16 +2972,16 @@ LOGIN_HTML = """
 <body>
     <div class="split">
         <div class="side">
-            <div style="display:flex; flex-direction:column; align-items:center;">
-                <img src="data:image/png;base64,{{ logo_b64 }}" alt="Apaw">
-                <p class="name">Apaw</p>
-                <p class="tag">Automated flood monitoring and early-warning system for Brgy. Mambog IV, Bacoor, Cavite.</p>
-            </div>
+            <img src="data:image/png;base64,{{ logo_b64 }}" alt="Apaw">
         </div>
         <div class="panel">
             <div class="box">
-                <h1>Sign in</h1>
-                <p class="sub">For barangay officials and the development team. Residents can use <a href="/resident">the public view</a> instead — no account needed.</p>
+                <div class="heading-row">
+                    <h1>Sign in</h1>
+                    <span class="info-icon" tabindex="0">i
+                        <span class="tooltip">For barangay officials and the development team. Residents can use the public view instead — no account needed.</span>
+                    </span>
+                </div>
                 {% if error %}<div class="error">{{ error }}</div>{% endif %}
                 <form method="POST">
                     <label>Username</label>
