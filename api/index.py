@@ -152,6 +152,128 @@ _last_hw_seen = {"esp1": "online", "esp2": "online", "esp3": "online", "pi": "on
 telemetry_buffer = []
 TELEMETRY_BUFFER_LEN = 2000
 
+# ==============================================================================
+# HISTORICAL REPORT — grid-aligned daily log, downloadable as CSV.
+#
+# Unlike telemetry_buffer above (which just appends one row per poll, every
+# ~3 seconds, with no fixed spacing), this keeps ONE row per node per
+# 5-minute wall-clock boundary (10:00, 10:05, 10:10, ...), starting from
+# whenever this feature first runs. 5 minutes is the finest interval the
+# History dropdown offers, and every other choice (10m/30m/1h) is an exact
+# multiple of it, so filtering these rows by "is this timestamp's minute a
+# multiple of the chosen interval" always lands exactly on the grid the
+# person picked (10:00/10:10/10:20 for 10 min — never 10:03/10:08). Nothing
+# is interpolated or guessed for a boundary that's skipped.
+#
+# CRITICAL — persistence caveat: daily_history (in memory) and the CSV
+# backup under HISTORY_LOG_DIR only survive for as long as THIS process
+# keeps running on the same machine. That's fine for an always-on single
+# server, which is the current deployment. But on Vercel specifically,
+# serverless functions can spin up a fresh container (fresh memory AND a
+# fresh, empty filesystem) at any time — a cold start silently loses
+# both copies. If/when this moves to Vercel for real, swap this for an
+# external store (Vercel KV/Postgres/etc.) instead of trusting local
+# memory or disk to survive.
+# ==============================================================================
+HISTORY_LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "history_logs")
+try:
+    os.makedirs(HISTORY_LOG_DIR, exist_ok=True)
+except OSError:
+    pass  # read-only filesystem (e.g. some serverless hosts) — in-memory copy still works for this run
+
+HISTORY_CSV_FIELDS = ["timestamp", "node", "node_label", "water_level_m", "water_flow_lmin",
+                       "humidity_pct", "temperature_c", "tier", "rain_mm_hr"]
+SAMPLE_GRID_SECONDS = 300  # 5 minutes — the finest interval HISTORY_INTERVALS (defined below) offers;
+                           # every other option there (10m/30m/1h) is an exact multiple of this.
+
+daily_history = {}                     # {"YYYY-MM-DD": [row, row, ...]} — today's data lives here first
+_last_sample_boundary = {"ts": None}   # last 5-min grid boundary (epoch seconds) already recorded, so
+                                        # repeated polls inside the same 5-min window don't double-write
+
+def _history_log_path(day_key):
+    safe_day = "".join(ch for ch in day_key if ch.isalnum() or ch == "-")
+    return os.path.join(HISTORY_LOG_DIR, "history_" + safe_day + ".csv")
+
+def _append_history_rows_to_disk(day_key, rows):
+    path = _history_log_path(day_key)
+    try:
+        file_exists = os.path.exists(path)
+        with open(path, "a", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=HISTORY_CSV_FIELDS)
+            if not file_exists:
+                writer.writeheader()
+            for row in rows:
+                writer.writerow({k: row.get(k, "") for k in HISTORY_CSV_FIELDS})
+    except OSError:
+        pass  # disk not writable this run — the in-memory copy in daily_history still works
+
+def _load_history_rows_for_day(day_key):
+    """In-memory copy wins (it's always current for today); falls back to
+    the on-disk backup, e.g. after a restart earlier the same day."""
+    if day_key in daily_history:
+        return daily_history[day_key]
+    path = _history_log_path(day_key)
+    if os.path.exists(path):
+        try:
+            with open(path, "r", newline="", encoding="utf-8") as f:
+                return list(csv.DictReader(f))
+        except OSError:
+            pass
+    return []
+
+def record_history_sample_if_due():
+    """Called on every /api/status poll (~every 3s while a dashboard tab is
+    open). The moment wall-clock time crosses into a new 5-minute grid
+    boundary, records exactly one reading per node (+ the rain gauge) for
+    that boundary — no more, no less, even if this fires several times
+    inside the same 5-minute window."""
+    now_ts = datetime.now().timestamp()
+    boundary = int(now_ts // SAMPLE_GRID_SECONDS) * SAMPLE_GRID_SECONDS
+    if _last_sample_boundary["ts"] == boundary:
+        return
+    _last_sample_boundary["ts"] = boundary
+
+    boundary_dt = datetime.fromtimestamp(boundary)
+    day_key = boundary_dt.strftime("%Y-%m-%d")
+    ts_label = boundary_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+    new_rows = []
+    for nid in NODE_ORDER:
+        s = synth_reading(nid)
+        new_rows.append({
+            "timestamp": ts_label, "node": nid, "node_label": NODE_META[nid]["label"],
+            "water_level_m": s["water_level"], "water_flow_lmin": s["water_flow"],
+            "humidity_pct": s["humidity"], "temperature_c": s["temperature"], "tier": s["tier"],
+            "rain_mm_hr": "",
+        })
+    r = synth_rain()
+    new_rows.append({
+        "timestamp": ts_label, "node": "node3", "node_label": "Barangay Hall (Rain Gauge)",
+        "water_level_m": "", "water_flow_lmin": "", "humidity_pct": "", "temperature_c": "",
+        "tier": "", "rain_mm_hr": r["intensity"],
+    })
+
+    daily_history.setdefault(day_key, []).extend(new_rows)
+    _append_history_rows_to_disk(day_key, new_rows)
+
+def history_report_rows(day_key, interval_seconds, node_filter="all"):
+    """Rows for day_key, filtered to the chosen interval's grid and
+    (optionally) a single node — the same filtering logic the CSV download
+    and any future preview would both use."""
+    interval_minutes = max(1, interval_seconds // 60)
+    out = []
+    for row in _load_history_rows_for_day(day_key):
+        try:
+            row_dt = datetime.strptime(row["timestamp"], "%Y-%m-%d %H:%M:%S")
+        except (KeyError, ValueError):
+            continue
+        if row_dt.minute % interval_minutes != 0:
+            continue
+        if node_filter != "all" and row.get("node") != node_filter:
+            continue
+        out.append(row)
+    return out
+
 def log_event(level, msg):
     event_log.append({"ts": datetime.now().strftime("%H:%M:%S"), "level": level, "msg": msg})
     if len(event_log) > 300:
@@ -461,6 +583,7 @@ RESEARCHER_HTML = """<!DOCTYPE html>
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="APAW">
     <link rel="apple-touch-icon" href="data:image/png;base64,{{ logo_b64 }}">
+    <link rel="icon" type="image/png" href="data:image/png;base64,{{ logo_b64 }}">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
@@ -764,7 +887,7 @@ RESEARCHER_HTML = """<!DOCTYPE html>
             <span id="strobe-text">—</span>
         </div>
 
-        <div class="row-label">Live Readings — the 5 tracked parameters</div>
+        <div class="row-label" id="live-readings-label">Live Readings from {{ meta[active].label }} Node</div>
         <div class="param-row">
             <div class="pcard c-level">
                 <div class="head"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2s6 7 6 11a6 6 0 11-12 0c0-4 6-11 6-11z"/></svg>Water Level</div>
@@ -935,7 +1058,7 @@ RESEARCHER_HTML = """<!DOCTYPE html>
 
         <div class="panel" id="history">
             <h3>History <span class="sub" id="history-node-label">{{ meta[active].label }} · recent readings</span><span class="info-icon" tabindex="0">i<span class="tooltip">Showing the last 12 readings for the selected node, spaced at the interval above. Node 1 and Node 2 histories are never merged.</span></span></h3>
-            <div class="hist-controls" style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
+            <div class="hist-controls" style="display:flex; align-items:center; gap:8px; margin-bottom:12px; flex-wrap:wrap;">
                 <label for="history-interval" style="font-size:0.82em; color:var(--mute); font-weight:600;">Show a reading every</label>
                 <select id="history-interval" onchange="onHistoryIntervalChange()" style="font-size:0.85em; padding:6px 10px; border-radius:8px; border:1px solid var(--line); background:var(--card2); color:var(--ink);">
                     <option value="300">5 minutes</option>
@@ -943,7 +1066,11 @@ RESEARCHER_HTML = """<!DOCTYPE html>
                     <option value="1800">30 minutes</option>
                     <option value="3600">1 hour</option>
                 </select>
+                <button type="button" class="qa-btn qa-4" onclick="downloadHistoryReport()" style="margin-left:auto; font-size:0.85em; padding:7px 12px;">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:15px; height:15px; vertical-align:-3px; margin-right:5px;"><path d="M14 3H6a2 2 0 00-2 2v14a2 2 0 002 2h12a2 2 0 002-2V9z"/><path d="M14 3v6h6"/></svg>Download Historical Report (CSV)
+                </button>
             </div>
+            <p class="settings-note" style="margin:-4px 0 12px; font-size:0.78em;">Downloads today's readings for {{ meta[active].label }}, spaced at the interval selected above — timestamps always land exactly on that grid (e.g. 10:00, 10:10, 10:20 for 10 minutes).</p>
             <div style="overflow-x:auto;">
                 <table class="hist-table" id="history-table">
                     <thead><tr><th>Time</th><th>Water Level (m)</th><th>Tier</th></tr></thead>
@@ -1263,6 +1390,7 @@ RESEARCHER_HTML = """<!DOCTYPE html>
         }
 
         function renderNode(nid, s, hist){
+            document.getElementById('live-readings-label').textContent = 'Live Readings from ' + NODE_META[nid].label + ' Node';
             document.getElementById('val-level').innerHTML = s.water_level + '<span class="unit">m</span>';
             document.getElementById('val-flow').innerHTML = s.water_flow + '<span class="unit">L/min</span>';
             document.getElementById('val-humidity').innerHTML = s.humidity + '<span class="unit">%</span>';
@@ -1318,6 +1446,13 @@ RESEARCHER_HTML = """<!DOCTYPE html>
             refreshHistoryPanel();
         }
 
+        function downloadHistoryReport(){
+            const select = document.getElementById('history-interval');
+            const interval = select ? select.value : '600';
+            const url = '/api/history_report.csv?node=' + encodeURIComponent(currentNode) + '&interval=' + encodeURIComponent(interval);
+            window.location.href = url;
+        }
+
         function selectNode(nid){
             currentNode = nid;
             document.querySelectorAll('.npick').forEach(el => el.classList.toggle('active', el.dataset.node === nid));
@@ -1325,6 +1460,29 @@ RESEARCHER_HTML = """<!DOCTYPE html>
             if (window.gisMarkers && window.gisMarkers[nid]) window.gisMarkers[nid].openPopup();
             refreshHistoryPanel();
         }
+
+        // ------------------------------------------------------------------
+        // Idle auto-rotation — if nobody clicks, scrolls, or presses a key
+        // for 10 seconds, automatically flip to the other node's tab
+        // (Creek <-> Mambog Bakery) and keep alternating for as long as the
+        // dashboard sits untouched. Any real interaction resets the 10s
+        // countdown so it never fights the person using it.
+        // ------------------------------------------------------------------
+        let idleRotateTimer = null;
+        const IDLE_ROTATE_MS = 10000;
+        function scheduleIdleRotate(){
+            if (idleRotateTimer) clearTimeout(idleRotateTimer);
+            idleRotateTimer = setTimeout(() => {
+                const idx = NODE_ORDER_JS.indexOf(currentNode);
+                const nextNode = NODE_ORDER_JS[(idx + 1) % NODE_ORDER_JS.length];
+                selectNode(nextNode);
+                scheduleIdleRotate();
+            }, IDLE_ROTATE_MS);
+        }
+        ['click', 'touchstart', 'scroll', 'keydown'].forEach(evt => {
+            document.addEventListener(evt, scheduleIdleRotate, { passive: true, capture: true });
+        });
+        scheduleIdleRotate();
 
         function pinIcon(color, isHq){
             const cls = isHq ? 'gis-pin hq' : 'gis-pin';
@@ -1637,6 +1795,7 @@ BARANGAY_HTML = """<!DOCTYPE html>
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="APAW">
     <link rel="apple-touch-icon" href="data:image/png;base64,{{ logo_b64 }}">
+    <link rel="icon" type="image/png" href="data:image/png;base64,{{ logo_b64 }}">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
@@ -1918,7 +2077,7 @@ BARANGAY_HTML = """<!DOCTYPE html>
             <span id="strobe-text">—</span>
         </div>
 
-        <div class="row-label">Live Readings — the 5 tracked parameters</div>
+        <div class="row-label" id="live-readings-label">Live Readings from {{ meta[active].label }} Node</div>
         <div class="param-row">
             <div class="pcard c-level">
                 <div class="head"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2s6 7 6 11a6 6 0 11-12 0c0-4 6-11 6-11z"/></svg>Water Level</div>
@@ -2089,7 +2248,7 @@ BARANGAY_HTML = """<!DOCTYPE html>
 
         <div class="panel" id="history">
             <h3>History <span class="sub" id="history-node-label">{{ meta[active].label }} · recent readings</span><span class="info-icon" tabindex="0">i<span class="tooltip">Showing the last 12 readings for the selected node, spaced at the interval above. Node 1 and Node 2 histories are never merged.</span></span></h3>
-            <div class="hist-controls" style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
+            <div class="hist-controls" style="display:flex; align-items:center; gap:8px; margin-bottom:12px; flex-wrap:wrap;">
                 <label for="history-interval" style="font-size:0.82em; color:var(--mute); font-weight:600;">Show a reading every</label>
                 <select id="history-interval" onchange="onHistoryIntervalChange()" style="font-size:0.85em; padding:6px 10px; border-radius:8px; border:1px solid var(--line); background:var(--card2); color:var(--ink);">
                     <option value="300">5 minutes</option>
@@ -2097,7 +2256,11 @@ BARANGAY_HTML = """<!DOCTYPE html>
                     <option value="1800">30 minutes</option>
                     <option value="3600">1 hour</option>
                 </select>
+                <button type="button" class="qa-btn qa-4" onclick="downloadHistoryReport()" style="margin-left:auto; font-size:0.85em; padding:7px 12px;">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:15px; height:15px; vertical-align:-3px; margin-right:5px;"><path d="M14 3H6a2 2 0 00-2 2v14a2 2 0 002 2h12a2 2 0 002-2V9z"/><path d="M14 3v6h6"/></svg>Download Historical Report (CSV)
+                </button>
             </div>
+            <p class="settings-note" style="margin:-4px 0 12px; font-size:0.78em;">Downloads today's readings for {{ meta[active].label }}, spaced at the interval selected above — timestamps always land exactly on that grid (e.g. 10:00, 10:10, 10:20 for 10 minutes).</p>
             <div style="overflow-x:auto;">
                 <table class="hist-table" id="history-table">
                     <thead><tr><th>Time</th><th>Water Level (m)</th><th>Tier</th></tr></thead>
@@ -2362,6 +2525,7 @@ BARANGAY_HTML = """<!DOCTYPE html>
         }
 
         function renderNode(nid, s, hist){
+            document.getElementById('live-readings-label').textContent = 'Live Readings from ' + NODE_META[nid].label + ' Node';
             document.getElementById('val-level').innerHTML = s.water_level + '<span class="unit">m</span>';
             document.getElementById('val-flow').innerHTML = s.water_flow + '<span class="unit">L/min</span>';
             document.getElementById('val-humidity').innerHTML = s.humidity + '<span class="unit">%</span>';
@@ -2417,6 +2581,13 @@ BARANGAY_HTML = """<!DOCTYPE html>
             refreshHistoryPanel();
         }
 
+        function downloadHistoryReport(){
+            const select = document.getElementById('history-interval');
+            const interval = select ? select.value : '600';
+            const url = '/api/history_report.csv?node=' + encodeURIComponent(currentNode) + '&interval=' + encodeURIComponent(interval);
+            window.location.href = url;
+        }
+
         function selectNode(nid){
             currentNode = nid;
             document.querySelectorAll('.npick').forEach(el => el.classList.toggle('active', el.dataset.node === nid));
@@ -2424,6 +2595,29 @@ BARANGAY_HTML = """<!DOCTYPE html>
             if (window.gisMarkers && window.gisMarkers[nid]) window.gisMarkers[nid].openPopup();
             refreshHistoryPanel();
         }
+
+        // ------------------------------------------------------------------
+        // Idle auto-rotation — if nobody clicks, scrolls, or presses a key
+        // for 10 seconds, automatically flip to the other node's tab
+        // (Creek <-> Mambog Bakery) and keep alternating for as long as the
+        // dashboard sits untouched. Any real interaction resets the 10s
+        // countdown so it never fights the person using it.
+        // ------------------------------------------------------------------
+        let idleRotateTimer = null;
+        const IDLE_ROTATE_MS = 10000;
+        function scheduleIdleRotate(){
+            if (idleRotateTimer) clearTimeout(idleRotateTimer);
+            idleRotateTimer = setTimeout(() => {
+                const idx = NODE_ORDER_JS.indexOf(currentNode);
+                const nextNode = NODE_ORDER_JS[(idx + 1) % NODE_ORDER_JS.length];
+                selectNode(nextNode);
+                scheduleIdleRotate();
+            }, IDLE_ROTATE_MS);
+        }
+        ['click', 'touchstart', 'scroll', 'keydown'].forEach(evt => {
+            document.addEventListener(evt, scheduleIdleRotate, { passive: true, capture: true });
+        });
+        scheduleIdleRotate();
 
         function pinIcon(color, isHq){
             const cls = isHq ? 'gis-pin hq' : 'gis-pin';
@@ -2643,6 +2837,7 @@ RESIDENT_HTML = """
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <title>Apaw — Para sa Residente</title>
+<link rel="icon" type="image/png" href="data:image/png;base64,{{ logo_b64 }}">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -2885,6 +3080,7 @@ TV_HTML = """
 <head>
 <meta charset="UTF-8">
 <title>Apaw — Barangay Operational Display</title>
+<link rel="icon" type="image/png" href="data:image/png;base64,{{ logo_b64 }}">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -3076,6 +3272,7 @@ CONTROLS_HTML = """
 <head>
     <title>APAW Presenter Tools</title>
     <meta charset="UTF-8">
+    <link rel="icon" type="image/png" href="data:image/png;base64,{{ logo_b64 }}">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
     <style>
@@ -3175,6 +3372,7 @@ LOGIN_HTML = """
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Apaw — Sign In</title>
+    <link rel="icon" type="image/png" href="data:image/png;base64,{{ logo_b64 }}">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
@@ -3268,6 +3466,7 @@ def build_api_payload():
     predictions = {nid: compute_ai_prediction(nid) for nid in NODE_ORDER}
     track_transitions_and_log()
     append_telemetry_row()
+    record_history_sample_if_due()
     return {
         "status": status,
         "tier": tiers,
@@ -3388,6 +3587,7 @@ def resident_portal():
         tier_on_json=_json.dumps({"none": "#e8eef4", "yellow": "#3a2c02", "orange": "#3a1c02", "red": "#ffffff"}),
         risk_label_json=_json.dumps(RISK_LABEL),
         contacts_json=_json.dumps(EMERGENCY_CONTACTS),
+        logo_b64=LOGO_B64,
     )
 
 @app.route('/api/resident_status')
@@ -3416,6 +3616,7 @@ def tv_dashboard():
         tier_color_json=_json.dumps(TIER_COLOR),
         tier_on_json=_json.dumps({"none": "#e8eef4", "yellow": "#3a2c02", "orange": "#3a1c02", "red": "#ffffff"}),
         headline_json=_json.dumps(HEADLINE),
+        logo_b64=LOGO_B64,
     )
 
 @app.route('/api/tv_status')
@@ -3434,7 +3635,7 @@ def api_tv_status():
 @app.route('/controls')
 @login_required(roles=['researcher'])
 def presenter_controls():
-    return render_template_string(CONTROLS_HTML)
+    return render_template_string(CONTROLS_HTML, logo_b64=LOGO_B64)
 
 @app.route('/manifest.webmanifest')
 def manifest():
@@ -3570,6 +3771,44 @@ def export_csv():
     log_event("INFO", "Telemetry CSV exported (" + str(len(telemetry_buffer)) + " rows).")
     return Response(buf.getvalue(), mimetype="text/csv",
                      headers={"Content-Disposition": "attachment; filename=apaw_telemetry.csv"})
+
+@app.route('/api/history_report.csv')
+@login_required(roles=['official', 'researcher'])
+def history_report_csv():
+    """Downloadable historical report — one row per node per grid-aligned
+    timestamp, at whichever interval the History panel's dropdown is set
+    to (5/10/30/60 min). Timestamps always land exactly on that grid
+    (10:00, 10:10, 10:20, ... for 10 min — never 10:03, 10:08) because
+    record_history_sample_if_due() above only ever writes rows on 5-minute
+    boundaries, and every other interval is an exact multiple of 5."""
+    node_filter = request.args.get('node', 'all')
+    if node_filter not in ('all', *NODE_ORDER):
+        node_filter = 'all'
+    try:
+        interval_seconds = int(request.args.get('interval', DEFAULT_HISTORY_INTERVAL_SECONDS))
+    except (TypeError, ValueError):
+        interval_seconds = DEFAULT_HISTORY_INTERVAL_SECONDS
+    if interval_seconds not in HISTORY_INTERVALS.values():
+        interval_seconds = DEFAULT_HISTORY_INTERVAL_SECONDS
+    interval_minutes = interval_seconds // 60
+
+    day_key = request.args.get('date', datetime.now().strftime("%Y-%m-%d"))
+    rows = history_report_rows(day_key, interval_seconds, node_filter)
+
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=HISTORY_CSV_FIELDS)
+    writer.writeheader()
+    for row in rows:
+        writer.writerow({k: row.get(k, "") for k in HISTORY_CSV_FIELDS})
+
+    log_event("INFO", "Historical report CSV exported (" + str(len(rows)) + " rows, every " +
+              str(interval_minutes) + " min, " + day_key +
+              (", " + node_filter if node_filter != 'all' else ", all nodes") + ").")
+
+    filename = "apaw_history_" + day_key + "_every" + str(interval_minutes) + "min" + \
+               ("_" + node_filter if node_filter != 'all' else "") + ".csv"
+    return Response(buf.getvalue(), mimetype="text/csv",
+                     headers={"Content-Disposition": "attachment; filename=" + filename})
 
 @app.route('/api/system')
 @login_required(roles=['researcher'])
