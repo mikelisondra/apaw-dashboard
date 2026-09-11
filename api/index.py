@@ -1234,19 +1234,50 @@ RESEARCHER_HTML = """<!DOCTYPE html>
             applySidebarCollapsed(localStorage.getItem('apawSidebarCollapsed') === '1');
         })();
 
-        // ---------- Nav highlight on click ----------
+        // ---------- Nav highlight: click (instant) + scroll-spy (follows you down the page) ----------
         (function initNavHighlight(){
-            document.querySelectorAll('.nav a').forEach(function(link){
-                link.addEventListener('click', function(){
-                    // Only same-page anchor links (#...) need JS-driven highlighting;
-                    // links like /researcher or /barangay reload the page and are
-                    // highlighted server-side via the "active" class already.
-                    if (this.getAttribute('href').charAt(0) === '#'){
-                        document.querySelectorAll('.nav a').forEach(function(el){ el.classList.remove('active'); });
-                        this.classList.add('active');
-                    }
-                });
+            const navLinks = Array.from(document.querySelectorAll('.nav a'));
+            const anchorLinks = navLinks.filter(function(link){ return link.getAttribute('href').charAt(0) === '#'; });
+            const topLink = navLinks.find(function(link){ return link.getAttribute('href').charAt(0) !== '#'; });
+            const sections = anchorLinks.map(function(link){
+                const el = document.getElementById(link.getAttribute('href').slice(1));
+                return el ? { link: link, el: el } : null;
+            }).filter(Boolean);
+
+            function setActive(link){
+                navLinks.forEach(function(el){ el.classList.remove('active'); });
+                if (link) link.classList.add('active');
+            }
+
+            // Instant feedback on click, before the browser's own anchor jump
+            // finishes (the scroll-spy below then keeps it in sync afterwards).
+            anchorLinks.forEach(function(link){
+                link.addEventListener('click', function(){ setActive(this); });
             });
+
+            if (!sections.length) return;
+
+            // Scroll-spy: whichever section's top has crossed the "reading
+            // line" near the top of the viewport is the one showing, so
+            // that's the nav item that lights up — same idea as a table of
+            // contents that tracks where you are on the page.
+            const READING_LINE = 130;
+            let ticking = false;
+            function updateActiveOnScroll(){
+                ticking = false;
+                let current = null;
+                for (let i = 0; i < sections.length; i++){
+                    if (sections[i].el.getBoundingClientRect().top <= READING_LINE) current = sections[i].link;
+                }
+                setActive(current || topLink);
+            }
+            window.addEventListener('scroll', function(){
+                if (!ticking){
+                    window.requestAnimationFrame(updateActiveOnScroll);
+                    ticking = true;
+                }
+            }, { passive: true });
+            updateActiveOnScroll();
         })();
 
         let currentNode = "{{ active }}";
@@ -2123,7 +2154,6 @@ BARANGAY_HTML = """<!DOCTYPE html>
         <div class="nav">
             <a href="/barangay" class="active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg><span class="nav-label">Dashboard</span></a>
             <a href="#trends"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 17l6-6 4 4 8-8"/><path d="M21 3v6h-6"/></svg><span class="nav-label">Real-time Data</span></a>
-            <a href="#history"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg><span class="nav-label">History</span></a>
             <a href="#alerts"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8a6 6 0 10-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg><span class="nav-label">Alerts</span></a>
             <a href="#risk-map"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s7-6.5 7-12a7 7 0 10-14 0c0 5.5 7 12 7 12z"/><circle cx="12" cy="9" r="2.5"/></svg><span class="nav-label">Map</span></a>
             <a href="#queue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 3H6a2 2 0 00-2 2v14a2 2 0 002 2h12a2 2 0 002-2V9z"/><path d="M14 3v6h6"/></svg><span class="nav-label">Reports</span></a>
@@ -2338,29 +2368,6 @@ BARANGAY_HTML = """<!DOCTYPE html>
             {% endif %}
         </div>
 
-        <div class="panel" id="history">
-            <h3>History <span class="sub" id="history-node-label">{{ meta[active].label }} · recent readings</span><span class="info-icon" tabindex="0">i<span class="tooltip">Showing the last 12 readings for the selected node, spaced at the interval above. Node 1 and Node 2 histories are never merged.</span></span></h3>
-            <div class="hist-controls" style="display:flex; align-items:center; gap:8px; margin-bottom:12px; flex-wrap:wrap;">
-                <label for="history-interval" style="font-size:0.82em; color:var(--mute); font-weight:600;">Show a reading every</label>
-                <select id="history-interval" onchange="onHistoryIntervalChange()" style="font-size:0.85em; padding:6px 10px; border-radius:8px; border:1px solid var(--line); background:var(--card2); color:var(--ink);">
-                    <option value="300">5 minutes</option>
-                    <option value="600" selected>10 minutes</option>
-                    <option value="1800">30 minutes</option>
-                    <option value="3600">1 hour</option>
-                </select>
-                <button type="button" class="qa-btn qa-4" onclick="downloadHistoryReport()" style="margin-left:auto; font-size:0.85em; padding:7px 12px;">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:15px; height:15px; vertical-align:-3px; margin-right:5px;"><path d="M14 3H6a2 2 0 00-2 2v14a2 2 0 002 2h12a2 2 0 002-2V9z"/><path d="M14 3v6h6"/></svg>Download Historical Report (CSV)
-                </button>
-            </div>
-            <p class="settings-note" style="margin:-4px 0 12px; font-size:0.78em;">Downloads today's readings for {{ meta[active].label }}, spaced at the interval selected above — timestamps always land exactly on that grid (e.g. 10:00, 10:10, 10:20 for 10 minutes).</p>
-            <div style="overflow-x:auto;">
-                <table class="hist-table" id="history-table">
-                    <thead><tr><th>Time</th><th>Water Level (m)</th><th>Tier</th></tr></thead>
-                    <tbody id="history-tbody"><tr><td colspan="3" class="empty-queue">Loading…</td></tr></tbody>
-                </table>
-            </div>
-        </div>
-
         <div class="panel" id="system-status">
             <h3>System Status <span class="sub">hardware diagnostics · ESP + Pi Hub</span><span class="info-icon" tabindex="0">i<span class="tooltip">This is connectivity/hardware health only (is each device online) — never a blended water-level figure. Water tiers above remain per-node.</span></span></h3>
             <div class="sys-grid" id="hw-grid">
@@ -2439,19 +2446,50 @@ BARANGAY_HTML = """<!DOCTYPE html>
             applySidebarCollapsed(localStorage.getItem('apawSidebarCollapsed') === '1');
         })();
 
-        // ---------- Nav highlight on click ----------
+        // ---------- Nav highlight: click (instant) + scroll-spy (follows you down the page) ----------
         (function initNavHighlight(){
-            document.querySelectorAll('.nav a').forEach(function(link){
-                link.addEventListener('click', function(){
-                    // Only same-page anchor links (#...) need JS-driven highlighting;
-                    // links like /researcher or /barangay reload the page and are
-                    // highlighted server-side via the "active" class already.
-                    if (this.getAttribute('href').charAt(0) === '#'){
-                        document.querySelectorAll('.nav a').forEach(function(el){ el.classList.remove('active'); });
-                        this.classList.add('active');
-                    }
-                });
+            const navLinks = Array.from(document.querySelectorAll('.nav a'));
+            const anchorLinks = navLinks.filter(function(link){ return link.getAttribute('href').charAt(0) === '#'; });
+            const topLink = navLinks.find(function(link){ return link.getAttribute('href').charAt(0) !== '#'; });
+            const sections = anchorLinks.map(function(link){
+                const el = document.getElementById(link.getAttribute('href').slice(1));
+                return el ? { link: link, el: el } : null;
+            }).filter(Boolean);
+
+            function setActive(link){
+                navLinks.forEach(function(el){ el.classList.remove('active'); });
+                if (link) link.classList.add('active');
+            }
+
+            // Instant feedback on click, before the browser's own anchor jump
+            // finishes (the scroll-spy below then keeps it in sync afterwards).
+            anchorLinks.forEach(function(link){
+                link.addEventListener('click', function(){ setActive(this); });
             });
+
+            if (!sections.length) return;
+
+            // Scroll-spy: whichever section's top has crossed the "reading
+            // line" near the top of the viewport is the one showing, so
+            // that's the nav item that lights up — same idea as a table of
+            // contents that tracks where you are on the page.
+            const READING_LINE = 130;
+            let ticking = false;
+            function updateActiveOnScroll(){
+                ticking = false;
+                let current = null;
+                for (let i = 0; i < sections.length; i++){
+                    if (sections[i].el.getBoundingClientRect().top <= READING_LINE) current = sections[i].link;
+                }
+                setActive(current || topLink);
+            }
+            window.addEventListener('scroll', function(){
+                if (!ticking){
+                    window.requestAnimationFrame(updateActiveOnScroll);
+                    ticking = true;
+                }
+            }, { passive: true });
+            updateActiveOnScroll();
         })();
 
         let currentNode = "{{ active }}";
@@ -2645,47 +2683,11 @@ BARANGAY_HTML = """<!DOCTYPE html>
             renderCameraPanel(nid);
         }
 
-        function renderHistoryTable(nid, hist){
-            document.getElementById('history-node-label').textContent = NODE_META[nid].label + ' · recent readings';
-            const tbody = document.getElementById('history-tbody');
-            const times = hist.times || [];
-            const n = hist.water_level.length;
-            let rows = '';
-            for (let i = n - 1; i >= 0; i--){
-                const t = times[i] || '—';
-                const tier = i === n - 1 ? hist.tier : '—';
-                rows += '<tr><td>' + t + '</td><td>' + hist.water_level[i] + '</td><td>' + tier + '</td></tr>';
-            }
-            tbody.innerHTML = rows || '<tr><td colspan="3" class="empty-queue">No history yet.</td></tr>';
-        }
-
-        async function refreshHistoryPanel(){
-            const select = document.getElementById('history-interval');
-            const interval = select ? select.value : '600';
-            try{
-                const res = await fetch('/api/node-history/' + currentNode + '?interval=' + interval);
-                const hist = await res.json();
-                renderHistoryTable(currentNode, hist);
-            } catch(e){ console.error('history fetch failed', e); }
-        }
-
-        function onHistoryIntervalChange(){
-            refreshHistoryPanel();
-        }
-
-        function downloadHistoryReport(){
-            const select = document.getElementById('history-interval');
-            const interval = select ? select.value : '600';
-            const url = '/api/history_report.csv?node=' + encodeURIComponent(currentNode) + '&interval=' + encodeURIComponent(interval);
-            window.location.href = url;
-        }
-
         function selectNode(nid){
             currentNode = nid;
             document.querySelectorAll('.npick').forEach(el => el.classList.toggle('active', el.dataset.node === nid));
             if (window.lastData) renderNode(nid, window.lastData.status[nid], window.lastData.history[nid]);
             if (window.gisMarkers && window.gisMarkers[nid]) window.gisMarkers[nid].openPopup();
-            refreshHistoryPanel();
         }
 
         // ------------------------------------------------------------------
@@ -2957,10 +2959,8 @@ BARANGAY_HTML = """<!DOCTYPE html>
             } catch(e){ console.error('poll failed', e); }
         }
         poll();
-        refreshHistoryPanel();
         initGisMap();
         setInterval(poll, 3000);
-        setInterval(refreshHistoryPanel, 30000);
 
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.register('/sw.js').catch(() => {});
@@ -2996,6 +2996,9 @@ RESIDENT_HTML = """
   .brand-row .sub{ margin-left:auto; display:flex; align-items:center; gap:6px; font-size:0.78em; color:#9fb2c6; }
   .brand-row .pulse{ width:8px; height:8px; border-radius:50%; background:#3fb985; animation:pulse 1.4s infinite; }
   @keyframes pulse{ 0%,100%{ opacity:1; } 50%{ opacity:0.3; } }
+  .back-btn{ display:flex; align-items:center; justify-content:center; width:30px; height:30px; border-radius:9px;
+          background:#101e2e; border:1px solid #223349; color:#e8eef4; flex-shrink:0; text-decoration:none; }
+  .back-btn svg{ width:18px; height:18px; color:#e8eef4; }
 
   select#areaSelect{ width:100%; padding:12px 14px; border-radius:12px; border:1px solid #223349;
           background:#101e2e; color:#e8eef4; font-size:0.95em; font-weight:600; font-family:inherit;
@@ -3048,6 +3051,34 @@ RESIDENT_HTML = """
   .call-btn:active{ background:#1c3350; }
 
   footer{ margin-top:auto; padding:18px; text-align:center; font-size:0.75em; color:#5c7189; }
+
+  /* Resident flood report — button + bottom-sheet modal */
+  .report-section{ padding:18px 18px 4px; }
+  .report-btn{ width:100%; display:flex; align-items:center; justify-content:center; gap:10px;
+          padding:14px; border-radius:14px; border:none; background:#e0523f; color:#fff;
+          font-family:inherit; font-weight:700; font-size:0.95em; cursor:pointer; }
+  .report-btn svg{ width:20px; height:20px; flex-shrink:0; }
+  .report-btn:active{ background:#c94631; }
+
+  .report-overlay{ position:fixed; inset:0; background:rgba(5,10,16,0.72); display:flex; align-items:flex-end;
+          justify-content:center; z-index:200; opacity:0; visibility:hidden; transition:opacity 0.2s ease; }
+  .report-overlay.show{ opacity:1; visibility:visible; }
+  .report-modal{ width:100%; max-width:460px; background:#101e2e; border-radius:20px 20px 0 0;
+          padding:20px 20px 26px; transform:translateY(30px); transition:transform 0.25s ease;
+          max-height:88vh; overflow-y:auto; }
+  .report-overlay.show .report-modal{ transform:translateY(0); }
+  .report-modal-head{ display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; }
+  .report-modal-head h3{ margin:0; font-family:'Space Grotesk',sans-serif; font-size:1.05em; }
+  .report-modal-sub{ margin:0 0 6px; font-size:0.8em; color:#9fb2c6; }
+  .report-close{ background:none; border:none; color:#9fb2c6; font-size:1.5em; line-height:1; cursor:pointer; padding:4px; }
+  .report-modal label{ display:block; font-size:0.82em; color:#9fb2c6; font-weight:600; margin:14px 0 6px; }
+  .report-modal select, .report-modal input[type="file"]{ width:100%; padding:12px 14px; border-radius:12px;
+          border:1px solid #223349; background:#0b1622; color:#e8eef4; font-size:0.9em; font-family:inherit; }
+  #reportPreview{ display:none; width:100%; max-height:220px; object-fit:cover; border-radius:12px; margin-top:12px; }
+  .report-submit{ width:100%; margin-top:18px; padding:14px; border-radius:12px; border:none; background:#3fb985;
+          color:#06251a; font-weight:700; font-size:0.95em; cursor:pointer; font-family:inherit; }
+  .report-submit:disabled{ opacity:0.6; }
+  .report-status{ margin-top:12px; text-align:center; font-size:0.85em; color:#9fb2c6; min-height:1.2em; }
 </style>
 </head>
 <body>
@@ -3055,6 +3086,9 @@ RESIDENT_HTML = """
 
   <header>
     <div class="brand-row">
+      <a href="/login" class="back-btn" aria-label="Bumalik sa login" title="Bumalik sa login">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 6l-6 6 6 6"/></svg>
+      </a>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2s6 7 6 11a6 6 0 11-12 0c0-4 6-11 6-11z"/></svg>
       <span class="name">Apaw - Brgy. Mambog IV</span>
       <span class="sub"><span class="pulse"></span>Live</span>
@@ -3078,6 +3112,13 @@ RESIDENT_HTML = """
     <ul id="actionList"></ul>
   </div>
 
+  <div class="report-section">
+    <button type="button" class="report-btn" onclick="openReportModal()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h3l2-3h6l2 3h3a1 1 0 011 1v11a1 1 0 01-1 1H4a1 1 0 01-1-1V8a1 1 0 011-1z"/><circle cx="12" cy="13" r="3.5"/></svg>
+      <span>Mag-ulat ng Baha</span>
+    </button>
+  </div>
+
   <div class="rain">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 15a5 5 0 000-10 6 6 0 00-11.3 2A4.5 4.5 0 007 15h10z"/><path d="M8 19l-1 2M12 19l-1 2M16 19l-1 2"/></svg>
     <div>
@@ -3093,6 +3134,30 @@ RESIDENT_HTML = """
   </div>
 
   <footer id="lastUpdated">Naghahanap ng koneksyon…</footer>
+</div>
+
+<div class="report-overlay" id="reportOverlay" role="dialog" aria-modal="true" aria-hidden="true">
+  <div class="report-modal">
+    <div class="report-modal-head">
+      <h3>Mag-ulat ng Pagbaha</h3>
+      <button type="button" class="report-close" onclick="closeReportModal()" aria-label="Isara">&times;</button>
+    </div>
+    <p class="report-modal-sub">Kukunan ng litrato ang lugar na bumabaha at ipapadala agad sa mga opisyal ng barangay para ma-verify.</p>
+    <form id="reportForm">
+      <label for="reportNode">Saang lugar ito?</label>
+      <select id="reportNode" name="node" required>
+        <option value="node1">Creek (Node 1)</option>
+        <option value="node2">Mambog Bakery (Node 2)</option>
+      </select>
+
+      <label for="reportPhoto">Kumuha o mag-upload ng larawan</label>
+      <input type="file" id="reportPhoto" name="photo" accept="image/*" capture="environment" required onchange="previewReportPhoto(event)">
+      <img id="reportPreview" alt="Preview ng larawan">
+
+      <button type="submit" id="reportSubmitBtn" class="report-submit">Ipadala ang Ulat</button>
+    </form>
+    <div id="reportStatus" class="report-status" role="status" aria-live="polite"></div>
+  </div>
 </div>
 
 <script>
@@ -3204,6 +3269,72 @@ async function poll(){
   } catch (e) { console.error(e); }
 }
 
+// ------------------------------------------------------------------
+// Resident flood report — bottom-sheet modal: pick the affected area,
+// take/attach a photo, and send it to /upload. That endpoint already
+// stores it for the barangay + researcher dashboards to verify or
+// reject, and their "new photo report" toast + Reports queue pick it
+// up automatically the next time they poll — nothing else to wire up.
+// ------------------------------------------------------------------
+function openReportModal(){
+  const overlay = document.getElementById('reportOverlay');
+  const nodeSelect = document.getElementById('reportNode');
+  const nid = NODE_ORDER[currentIndex];
+  if (nid) nodeSelect.value = nid;
+  overlay.classList.add('show');
+  overlay.setAttribute('aria-hidden', 'false');
+}
+
+function closeReportModal(){
+  const overlay = document.getElementById('reportOverlay');
+  overlay.classList.remove('show');
+  overlay.setAttribute('aria-hidden', 'true');
+  document.getElementById('reportForm').reset();
+  const preview = document.getElementById('reportPreview');
+  preview.style.display = 'none';
+  preview.src = '';
+  document.getElementById('reportStatus').textContent = '';
+}
+
+function previewReportPhoto(e){
+  const file = e.target.files[0];
+  const img = document.getElementById('reportPreview');
+  if (!file) { img.style.display = 'none'; return; }
+  img.src = URL.createObjectURL(file);
+  img.style.display = 'block';
+}
+
+document.getElementById('reportOverlay').addEventListener('click', function(e){
+  if (e.target === this) closeReportModal();
+});
+
+document.getElementById('reportForm').addEventListener('submit', async function(e){
+  e.preventDefault();
+  const statusEl = document.getElementById('reportStatus');
+  const btn = document.getElementById('reportSubmitBtn');
+  const fileInput = document.getElementById('reportPhoto');
+  if (!fileInput.files.length){
+    statusEl.textContent = 'Pumili muna ng larawan bago ipadala.';
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = 'Ipinapadala…';
+  statusEl.textContent = '';
+  try {
+    const fd = new FormData();
+    fd.append('photo', fileInput.files[0]);
+    fd.append('node', document.getElementById('reportNode').value);
+    await fetch('/upload', { method: 'POST', body: fd });
+    statusEl.textContent = 'Naipadala na ang iyong ulat. Salamat sa pag-aalaga sa barangay!';
+    setTimeout(closeReportModal, 2000);
+  } catch (err) {
+    statusEl.textContent = 'May problema sa pagpapadala. Subukan muli.';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Ipadala ang Ulat';
+  }
+});
+
 buildCallGrid();
 setupSwipe();
 goToSlide(0);
@@ -3232,6 +3363,9 @@ TV_HTML = """
   .topbar{ display:flex; align-items:center; justify-content:space-between; padding:22px 40px; background:rgba(0,0,0,0.22); flex-shrink:0; }
   .brand{ display:flex; align-items:center; gap:14px; font-family:'Space Grotesk',sans-serif; font-weight:700; font-size:1.4em; }
   .brand svg{ width:30px; height:30px; }
+  .brand .back-btn{ display:flex; align-items:center; justify-content:center; width:34px; height:34px; border-radius:10px;
+          background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.18); color:#e8eef4; text-decoration:none; flex-shrink:0; }
+  .brand .back-btn svg{ width:20px; height:20px; }
   .top-right{ display:flex; align-items:center; gap:28px; font-size:1.05em; }
   .live{ display:flex; align-items:center; gap:8px; font-weight:600; }
   .live .pulse{ width:11px; height:11px; border-radius:50%; background:#3fb985; animation:pulse 1.4s infinite; }
@@ -3274,6 +3408,9 @@ TV_HTML = """
 
     <div class="topbar">
       <div class="brand">
+        <a href="/login" class="back-btn" aria-label="Back to login" title="Back to login">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 6l-6 6 6 6"/></svg>
+        </a>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2s6 7 6 11a6 6 0 11-12 0c0-4 6-11 6-11z"/></svg>
         Apaw - Brgy. Mambog IV
       </div>
