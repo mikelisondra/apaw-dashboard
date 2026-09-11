@@ -73,6 +73,12 @@ def login_required(roles=None):
 #     warm across your requests), not durable across a cold start.
 # ==============================================================================
 
+# CARTO basemaps now require a free API key (carto.com/basemaps/apikey) or
+# tiles render with an "API key required" watermark. Set CARTO_API_KEY as an
+# environment variable (locally in a .env / shell export, and on Vercel under
+# Project Settings -> Environment Variables) — never hardcode the key here.
+CARTO_API_KEY = os.environ.get("CARTO_API_KEY", "")
+
 SIMULATION_MODE = "normal"
 HISTORY_LEN = 12
 METRICS = ["water_level", "water_flow", "rainfall", "temperature", "humidity"]
@@ -92,21 +98,20 @@ METRICS = ["water_level", "water_flow", "rainfall", "temperature", "humidity"]
 # diagnostics (is each device online), which is a connectivity summary, not
 # a water-level blend.
 #
-# lat/lng are placeholders centered on Brgy. Mambog IV, Bacoor, Cavite —
-# swap in real surveyed GPS once the ESP units are physically sited.
+# lat/lng are real surveyed GPS for Brgy. Mambog IV, Bacoor, Cavite.
 NODE_META = {
-    "node1": {"label": "Inflow Area", "short": "Node 1", "kind": "inflow",
-              "desc": "Flood entry point", "device": "esp1", "lat": 14.4250, "lng": 120.9592},
-    "node2": {"label": "Outflow / Catchment Area", "short": "Node 2", "kind": "outflow",
-              "desc": "Flood pooling area", "device": "esp2", "lat": 14.4223, "lng": 120.9652},
+    "node1": {"label": "Creek", "short": "Node 1", "kind": "inflow",
+              "desc": "Flood entry point", "device": "esp1", "lat": 14.42275, "lng": 120.962306},
+    "node2": {"label": "Mambog Bakery", "short": "Node 2", "kind": "outflow",
+              "desc": "Flood pooling area", "device": "esp2", "lat": 14.422714629327132, "lng": 120.96120497164198},
 }
 NODE_ORDER = ["node1", "node2"]
 ALL_TABS = list(NODE_ORDER)          # kept for template compatibility — no "main" entry
 ALL_META = dict(NODE_META)
 
-RAIN_META = {"label": "Rain Gauge", "short": "Node 3", "kind": "rain",
-             "desc": "Barangay Hall roof", "device": "esp3", "lat": 14.4232, "lng": 120.9617}
-HQ_META = {"label": "Raspberry Pi Hub", "desc": "Brgy. Mambog IV Hall", "lat": 14.4228, "lng": 120.9617}
+RAIN_META = {"label": "Barangay Hall", "short": "Node 3", "kind": "rain",
+             "desc": "Barangay Hall roof", "device": "esp3", "lat": 14.422713020817234, "lng": 120.96148717260122}
+HQ_META = {"label": "Raspberry Pi Hub", "desc": "Brgy. Mambog IV Hall", "lat": 14.422713020817234, "lng": 120.96148717260122}
 
 # PAGASA-aligned tiers. No "green" — PAGASA's own rainfall-signal system
 # only defines Yellow/Orange/Red; "none" is its own neutral no-warning
@@ -121,9 +126,9 @@ RISK_LABEL = {"none": "Safe", "yellow": "Monitor", "orange": "Alert", "red": "Ev
 resident_reports = []
 
 HARDWARE = {
-    "esp1": {"kind": "esp", "label": "ESP32-S3 — Node 1 (Inflow)", "status": "online", "battery_pct": 96.0, "has_camera": True},
-    "esp2": {"kind": "esp", "label": "ESP32-S3 — Node 2 (Outflow)", "status": "online", "battery_pct": 94.0, "has_camera": True},
-    "esp3": {"kind": "esp", "label": "ESP — Node 3 (Rain Gauge)", "status": "online", "battery_pct": 99.0, "has_camera": False},
+    "esp1": {"kind": "esp", "label": "ESP32-S3 — Node 1 (Creek)", "status": "online", "battery_pct": 96.0, "has_camera": True},
+    "esp2": {"kind": "esp", "label": "ESP32-S3 — Node 2 (Mambog Bakery)", "status": "online", "battery_pct": 94.0, "has_camera": True},
+    "esp3": {"kind": "esp", "label": "ESP — Node 3 (Barangay Hall)", "status": "online", "battery_pct": 99.0, "has_camera": False},
     "pi":   {"kind": "pi", "label": "Raspberry Pi Hub", "status": "online"},
 }
 _forced_tier = {"node1": "none", "node2": "none"}
@@ -803,7 +808,7 @@ RESEARCHER_HTML = """<!DOCTYPE html>
                 <div class="range" id="batt-caption">ESP node battery</div>
             </div>
             <div class="legend-card">
-                <h4>Node 3 — Rain Gauge <span style="font-weight:500;color:var(--mute);">(always shown)</span></h4>
+                <h4>Node 3 — Barangay Hall <span style="font-weight:500;color:var(--mute);">(always shown)</span></h4>
                 <div class="value" id="val-rain-gauge" style="font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:1.5em;">—<span class="unit" style="font-size:0.5em;color:var(--mute);"> mm/hr</span></div>
                 <div class="range" id="rain-gauge-caption">—</div>
             </div>
@@ -1016,6 +1021,7 @@ RESEARCHER_HTML = """<!DOCTYPE html>
     <script>
         const NODE_META = {{ meta_json | safe }};
         const NODE_ORDER_JS = {{ node_order | tojson }};
+        const CARTO_API_KEY = {{ carto_api_key | tojson }};
 
         // ============================================================
         // THEME — light/dark toggle for the whole dashboard, including
@@ -1333,9 +1339,12 @@ RESEARCHER_HTML = """<!DOCTYPE html>
 
         function mapTileUrl(){
             const isDark = document.documentElement.getAttribute('data-theme') !== 'light';
-            return isDark
+            const base = isDark
                 ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
                 : 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';
+            // CARTO requires a free API key (carto.com/basemaps/apikey) — without
+            // it tiles still load but are stamped with an "API key required" watermark.
+            return CARTO_API_KEY ? (base + '?key=' + CARTO_API_KEY) : base;
         }
 
         function initGisMap(){
@@ -1944,7 +1953,7 @@ BARANGAY_HTML = """<!DOCTYPE html>
                 <div class="range" id="batt-caption">ESP node battery</div>
             </div>
             <div class="legend-card">
-                <h4>Node 3 — Rain Gauge <span style="font-weight:500;color:var(--mute);">(always shown)</span></h4>
+                <h4>Node 3 — Barangay Hall <span style="font-weight:500;color:var(--mute);">(always shown)</span></h4>
                 <div class="value" id="val-rain-gauge" style="font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:1.5em;">—<span class="unit" style="font-size:0.5em;color:var(--mute);"> mm/hr</span></div>
                 <div class="range" id="rain-gauge-caption">—</div>
             </div>
@@ -2102,6 +2111,7 @@ BARANGAY_HTML = """<!DOCTYPE html>
     <script>
         const NODE_META = {{ meta_json | safe }};
         const NODE_ORDER_JS = {{ node_order | tojson }};
+        const CARTO_API_KEY = {{ carto_api_key | tojson }};
 
         // ============================================================
         // THEME — light/dark toggle for the whole dashboard, including
@@ -2419,9 +2429,12 @@ BARANGAY_HTML = """<!DOCTYPE html>
 
         function mapTileUrl(){
             const isDark = document.documentElement.getAttribute('data-theme') !== 'light';
-            return isDark
+            const base = isDark
                 ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
                 : 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';
+            // CARTO requires a free API key (carto.com/basemaps/apikey) — without
+            // it tiles still load but are stamped with an "API key required" watermark.
+            return CARTO_API_KEY ? (base + '?key=' + CARTO_API_KEY) : base;
         }
 
         function initGisMap(){
@@ -2694,8 +2707,8 @@ RESIDENT_HTML = """
       <span class="sub"><span class="pulse"></span>Live</span>
     </div>
     <select id="areaSelect" onchange="goToSlide(this.selectedIndex)">
-      <option value="node1">Inflow Area (Node 1)</option>
-      <option value="node2">Outflow / Catchment Area (Node 2)</option>
+      <option value="node1">Creek (Node 1)</option>
+      <option value="node2">Mambog Bakery (Node 2)</option>
     </select>
   </header>
 
@@ -2716,7 +2729,7 @@ RESIDENT_HTML = """
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 15a5 5 0 000-10 6 6 0 00-11.3 2A4.5 4.5 0 007 15h10z"/><path d="M8 19l-1 2M12 19l-1 2M16 19l-1 2"/></svg>
     <div>
       <div class="rlabel" id="rainLabel">—</div>
-      <div class="rsub">Node 3 — Rain Gauge</div>
+      <div class="rsub">Node 3 — Barangay Hall</div>
     </div>
     <div class="rmain" id="rainMain">—</div>
   </div>
@@ -2921,7 +2934,7 @@ TV_HTML = """
 
     <div class="rainbar">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 15a5 5 0 000-10 6 6 0 00-11.3 2A4.5 4.5 0 007 15h10z"/><path d="M8 19l-1 2M12 19l-1 2M16 19l-1 2"/></svg>
-      <span class="rlabel" id="rain-label">Node 3 — Rain Gauge</span>
+      <span class="rlabel" id="rain-label">Node 3 — Barangay Hall</span>
       <span class="rval" id="rain-val">—</span>
     </div>
 
@@ -3083,7 +3096,7 @@ CONTROLS_HTML = """
         </div>
 
         <div class="node-block">
-            <h3>Node 1 — Inflow Area</h3>
+            <h3>Node 1 — Creek</h3>
             <div class="btn-row">
                 <a class="b-none" href="/set_tier/node1/none">None</a>
                 <a class="b-yellow" href="/set_tier/node1/yellow">Yellow</a>
@@ -3093,7 +3106,7 @@ CONTROLS_HTML = """
         </div>
 
         <div class="node-block">
-            <h3>Node 2 — Outflow / Catchment Area</h3>
+            <h3>Node 2 — Mambog Bakery</h3>
             <div class="btn-row">
                 <a class="b-none" href="/set_tier/node2/none">None</a>
                 <a class="b-yellow" href="/set_tier/node2/yellow">Yellow</a>
@@ -3309,6 +3322,7 @@ def _dashboard_context():
         meta_json=_json.dumps(ALL_META),
         logo_b64=LOGO_B64,
         display_name=session.get('display_name', ''),
+        carto_api_key=CARTO_API_KEY,
     )
 
 @app.route('/researcher')
