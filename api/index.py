@@ -2081,7 +2081,7 @@ BARANGAY_HTML = """<!DOCTYPE html>
         .leaflet-popup-content b{ display:block; margin-bottom:2px; }
 
         /* ---------- BOTTOM GRID ---------- */
-        .bottom-grid{ display:grid; grid-template-columns:1.4fr 1fr; gap:16px; margin-bottom:16px; align-items:start; }
+        .bottom-grid{ display:grid; grid-template-columns:1fr; gap:16px; margin-bottom:16px; align-items:start; } /* single column: Quick Actions removed, Researcher dashboard only */
         .alert-row{ display:flex; gap:10px; align-items:flex-start; padding:9px 0; border-bottom:1px solid var(--line); font-size:0.85em; }
         .alert-row:last-child{ border-bottom:none; }
         .alert-row .dot{ width:8px; height:8px; border-radius:50%; margin-top:5px; flex-shrink:0; }
@@ -2327,16 +2327,6 @@ BARANGAY_HTML = """<!DOCTYPE html>
                     {% endfor %}
                 {% endif %}
                 <a href="#alerts" class="view-all">View all alerts →</a>
-            </div>
-
-            <div class="panel">
-                <h3>Quick Actions<span class="info-icon" tabindex="0">i<span class="tooltip">No SMS in this build. Medium risk auto-triggers a spoken warning + strobe light. High risk auto-triggers the alarm siren instead. These buttons are for testing/demo only.</span></span></h3>
-                <div class="qa-grid">
-                    <button class="qa-btn qa-1" onclick="testVoiceAnnouncement()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 010 7"/><path d="M18.5 5.5a9 9 0 010 13"/></svg>Test Voice Announcement</button>
-                    <button class="qa-btn qa-2" onclick="testSiren()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10v4a1 1 0 001 1h3l5 4V5L7 9H4a1 1 0 00-1 1z"/><path d="M16 8a5 5 0 010 8"/></svg>Test Alarm Siren</button>
-                    <button class="qa-btn qa-3" onclick="testStrobe()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M4.2 4.2l2.2 2.2M17.6 17.6l2.2 2.2M2 12h3M19 12h3M4.2 19.8l2.2-2.2M17.6 6.4l2.2-2.2"/></svg>Test Strobe Light</button>
-                    <a class="qa-btn qa-4" href="/api/export.csv" style="text-decoration:none;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 3H6a2 2 0 00-2 2v14a2 2 0 002 2h12a2 2 0 002-2V9z"/><path d="M14 3v6h6"/></svg>Export Telemetry CSV</a>
-                </div>
             </div>
         </div>
 
@@ -2913,13 +2903,6 @@ BARANGAY_HTML = """<!DOCTYPE html>
             sirenAudio.play().catch(()=>{});
             showStrobe('high', '🚨 RED — ' + NODE_META[nid].label + ': flooding imminent. Evacuate low-lying areas now.');
         }
-
-        function testVoiceAnnouncement(){
-            const eta = (window.lastData && window.lastData.eta[currentNode]) || 15;
-            announceWarning(currentNode, 'Orange', eta);
-        }
-        function testSiren(){ alarmRed(currentNode); }
-        function testStrobe(){ showStrobe('medium', 'Strobe light test — ' + NODE_META[currentNode].label); setTimeout(hideStrobeIfIdle, 6000); }
 
         function checkAlertTransitions(data){
             Object.keys(data.tier).forEach(nid => {
