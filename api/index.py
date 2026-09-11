@@ -789,7 +789,9 @@ RESEARCHER_HTML = """<!DOCTYPE html>
         .report img{ width:80px; height:80px; object-fit:cover; border-radius:7px; flex-shrink:0; }
         .report-info h4{ margin:0 0 3px 0; font-size:0.92em; }
         .report-info p{ margin:0 0 8px 0; color:var(--mute); font-size:0.8em; }
-        .report-info .tag{ display:inline-block; background:var(--chip); color:var(--mute); font-size:0.68em; padding:2px 8px; border-radius:20px; margin-bottom:6px; }
+        .report-info .tag{ display:inline-block; background:var(--chip); color:var(--mute); font-size:0.68em; padding:2px 8px; border-radius:20px; margin-bottom:6px; margin-right:4px; }
+        .report-info .tag-type{ background:var(--blue); color:#fff; }
+        .report-comment{ font-style:italic; color:var(--mute); margin:4px 0 0; }
         .report-actions{ display:flex; gap:8px; }
         .btn-verify{ background:var(--green); color:#fff; padding:7px 14px; text-decoration:none; border-radius:6px; font-weight:600; font-size:0.82em; }
         .btn-reject{ background:transparent; color:var(--red); padding:7px 14px; text-decoration:none; border-radius:6px; font-weight:600; font-size:0.82em; border:1px solid var(--red); }
@@ -1060,8 +1062,10 @@ RESEARCHER_HTML = """<!DOCTYPE html>
                     <img src="data:image/jpeg;base64,{{ report.image_data }}">
                     <div class="report-info">
                         <div class="tag">{{ meta[report.node]['label'] if report.node in meta else 'Unspecified area' }}</div>
+                        <div class="tag tag-type">{% if report.report_type == 'barado' %}May Barado{% elif report.report_type == 'iba' %}Iba pa{% else %}May Baha{% endif %}</div>
                         <h4>Field Report #{{ report.id }}</h4>
                         <p>Received {{ report.time }}</p>
+                        {% if report.comment %}<p class="report-comment">“{{ report.comment }}”</p>{% endif %}
                         {% if report.status == 'Pending' %}
                             <div class="report-actions">
                                 <a href="/verify/{{ report.id }}" class="btn-verify">Verify sighting</a>
@@ -1676,7 +1680,8 @@ RESEARCHER_HTML = """<!DOCTYPE html>
                 img.style.display = 'block';
                 toast.querySelector('.rt-icon').style.display = 'none';
             }
-            sub.textContent = (rep.node_label || 'Unspecified area') + ' · ' + rep.time + ' · tap to review';
+            const typeLabel = rep.report_type === 'barado' ? 'May Barado' : (rep.report_type === 'iba' ? 'Iba pa' : 'May Baha');
+            sub.textContent = typeLabel + ' · ' + (rep.node_label || 'Unspecified area') + ' · ' + rep.time + ' · tap to review';
             toast.classList.add('show');
             if (reportToastTimer) clearTimeout(reportToastTimer);
             reportToastTimer = setTimeout(() => dismissReportToast(false), 9000);
@@ -2102,7 +2107,9 @@ BARANGAY_HTML = """<!DOCTYPE html>
         .report img{ width:80px; height:80px; object-fit:cover; border-radius:7px; flex-shrink:0; }
         .report-info h4{ margin:0 0 3px 0; font-size:0.92em; }
         .report-info p{ margin:0 0 8px 0; color:var(--mute); font-size:0.8em; }
-        .report-info .tag{ display:inline-block; background:var(--chip); color:var(--mute); font-size:0.68em; padding:2px 8px; border-radius:20px; margin-bottom:6px; }
+        .report-info .tag{ display:inline-block; background:var(--chip); color:var(--mute); font-size:0.68em; padding:2px 8px; border-radius:20px; margin-bottom:6px; margin-right:4px; }
+        .report-info .tag-type{ background:var(--blue); color:#fff; }
+        .report-comment{ font-style:italic; color:var(--mute); margin:4px 0 0; }
         .report-actions{ display:flex; gap:8px; }
         .btn-verify{ background:var(--green); color:#fff; padding:7px 14px; text-decoration:none; border-radius:6px; font-weight:600; font-size:0.82em; }
         .btn-reject{ background:transparent; color:var(--red); padding:7px 14px; text-decoration:none; border-radius:6px; font-weight:600; font-size:0.82em; border:1px solid var(--red); }
@@ -2340,8 +2347,10 @@ BARANGAY_HTML = """<!DOCTYPE html>
                     <img src="data:image/jpeg;base64,{{ report.image_data }}">
                     <div class="report-info">
                         <div class="tag">{{ meta[report.node]['label'] if report.node in meta else 'Unspecified area' }}</div>
+                        <div class="tag tag-type">{% if report.report_type == 'barado' %}May Barado{% elif report.report_type == 'iba' %}Iba pa{% else %}May Baha{% endif %}</div>
                         <h4>Field Report #{{ report.id }}</h4>
                         <p>Received {{ report.time }}</p>
+                        {% if report.comment %}<p class="report-comment">“{{ report.comment }}”</p>{% endif %}
                         {% if report.status == 'Pending' %}
                             <div class="report-actions">
                                 <a href="/verify/{{ report.id }}" class="btn-verify">Verify sighting</a>
@@ -2842,7 +2851,8 @@ BARANGAY_HTML = """<!DOCTYPE html>
                 img.style.display = 'block';
                 toast.querySelector('.rt-icon').style.display = 'none';
             }
-            sub.textContent = (rep.node_label || 'Unspecified area') + ' · ' + rep.time + ' · tap to review';
+            const typeLabel = rep.report_type === 'barado' ? 'May Barado' : (rep.report_type === 'iba' ? 'Iba pa' : 'May Baha');
+            sub.textContent = typeLabel + ' · ' + (rep.node_label || 'Unspecified area') + ' · ' + rep.time + ' · tap to review';
             toast.classList.add('show');
             if (reportToastTimer) clearTimeout(reportToastTimer);
             reportToastTimer = setTimeout(() => dismissReportToast(false), 9000);
@@ -3055,8 +3065,9 @@ RESIDENT_HTML = """
   .report-modal-sub{ margin:0 0 6px; font-size:0.8em; color:#9fb2c6; }
   .report-close{ background:none; border:none; color:#9fb2c6; font-size:1.5em; line-height:1; cursor:pointer; padding:4px; }
   .report-modal label{ display:block; font-size:0.82em; color:#9fb2c6; font-weight:600; margin:14px 0 6px; }
-  .report-modal select, .report-modal input[type="file"]{ width:100%; padding:12px 14px; border-radius:12px;
+  .report-modal select, .report-modal input[type="file"], .report-modal textarea{ width:100%; padding:12px 14px; border-radius:12px;
           border:1px solid #223349; background:#0b1622; color:#e8eef4; font-size:0.9em; font-family:inherit; }
+  .report-modal textarea{ resize:vertical; min-height:64px; }
   #reportPreview{ display:none; width:100%; max-height:220px; object-fit:cover; border-radius:12px; margin-top:12px; }
   .report-submit{ width:100%; margin-top:18px; padding:14px; border-radius:12px; border:none; background:#3fb985;
           color:#06251a; font-weight:700; font-size:0.95em; cursor:pointer; font-family:inherit; }
@@ -3132,6 +3143,16 @@ RESIDENT_HTML = """
         <option value="node1">Creek (Node 1)</option>
         <option value="node2">Mambog Bakery (Node 2)</option>
       </select>
+
+      <label for="reportType">Klase ng ulat</label>
+      <select id="reportType" name="report_type" onchange="onReportTypeChange()">
+        <option value="baha">May Baha</option>
+        <option value="barado">May Barado (kanal/imburnal)</option>
+        <option value="iba">Iba pa</option>
+      </select>
+
+      <label for="reportComment" id="reportCommentLabel">Karagdagang detalye (opsyonal)</label>
+      <textarea id="reportComment" name="comment" rows="3" placeholder="Hal. May baha na sa may kanto, tuhod na ang lalim…"></textarea>
 
       <label for="reportPhoto">Kumuha o mag-upload ng larawan</label>
       <input type="file" id="reportPhoto" name="photo" accept="image/*" capture="environment" required onchange="previewReportPhoto(event)">
@@ -3277,6 +3298,22 @@ function closeReportModal(){
   preview.style.display = 'none';
   preview.src = '';
   document.getElementById('reportStatus').textContent = '';
+  onReportTypeChange();
+}
+
+// "Iba pa" needs a comment so officials know what they're looking at;
+// the other presets are self-explanatory, so the comment stays optional.
+function onReportTypeChange(){
+  const type = document.getElementById('reportType').value;
+  const comment = document.getElementById('reportComment');
+  const label = document.getElementById('reportCommentLabel');
+  if (type === 'iba'){
+    comment.required = true;
+    label.textContent = 'Ilarawan ang ulat';
+  } else {
+    comment.required = false;
+    label.textContent = 'Karagdagang detalye (opsyonal)';
+  }
 }
 
 function previewReportPhoto(e){
@@ -3296,8 +3333,14 @@ document.getElementById('reportForm').addEventListener('submit', async function(
   const statusEl = document.getElementById('reportStatus');
   const btn = document.getElementById('reportSubmitBtn');
   const fileInput = document.getElementById('reportPhoto');
+  const reportType = document.getElementById('reportType').value;
+  const comment = document.getElementById('reportComment').value.trim();
   if (!fileInput.files.length){
     statusEl.textContent = 'Pumili muna ng larawan bago ipadala.';
+    return;
+  }
+  if (reportType === 'iba' && !comment){
+    statusEl.textContent = 'Pakilagay ang maikling detalye para sa "Iba pa".';
     return;
   }
   btn.disabled = true;
@@ -3307,6 +3350,8 @@ document.getElementById('reportForm').addEventListener('submit', async function(
     const fd = new FormData();
     fd.append('photo', fileInput.files[0]);
     fd.append('node', document.getElementById('reportNode').value);
+    fd.append('report_type', reportType);
+    fd.append('comment', comment);
     await fetch('/upload', { method: 'POST', body: fd });
     statusEl.textContent = 'Naipadala na ang iyong ulat. Salamat sa pag-aalaga sa barangay!';
     setTimeout(closeReportModal, 2000);
@@ -3941,11 +3986,14 @@ def upload_report():
     if 'photo' in request.files:
         file = request.files['photo']
         node = request.form.get('node', '')
+        report_type = request.form.get('report_type', 'baha')
+        comment = request.form.get('comment', '').strip()
         if file.filename != '':
             image_b64 = base64.b64encode(file.read()).decode('utf-8')
             report_id = len(resident_reports) + 1
             resident_reports.append({
                 "id": report_id, "image_data": image_b64, "node": node,
+                "report_type": report_type, "comment": comment,
                 "time": datetime.now().strftime("%H:%M:%S"), "status": "Pending"
             })
     return redirect(url_for('resident_portal'))
@@ -3962,6 +4010,8 @@ def api_report_detail(report_id):
                 "id": r['id'],
                 "node": r['node'],
                 "node_label": NODE_META.get(r['node'], {}).get('label', 'Unspecified area'),
+                "report_type": r.get('report_type', 'baha'),
+                "comment": r.get('comment', ''),
                 "time": r['time'],
                 "image_data": r['image_data'],
             })
