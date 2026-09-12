@@ -3728,10 +3728,10 @@ LOGIN_HTML = """
         .foot a{ color:#fff; text-decoration:underline; }
 
         @media (max-width:720px){
-            .split{ flex-direction:column; }
+            .split{ flex-direction:column; min-height:auto; }
             .side{ flex:0 0 auto; padding:28px 20px 16px; }
             .side img{ width:110px; height:110px; }
-            .panel{ padding:28px 20px 40px; align-items:flex-start; }
+            .panel{ flex:0 0 auto; padding:28px 20px 40px; align-items:center; }
             .box{ max-width:100%; margin:0 auto; }
             .heading-row{ margin-bottom:20px; }
             .seam{ display:none; }
