@@ -134,6 +134,31 @@ HARDWARE = {
 _forced_tier = {"node1": "none", "node2": "none"}
 _forced_hw = {"esp1": None, "esp2": None, "esp3": None, "pi": None}  # None = auto
 
+# DEMO ONLY: link the simulated rain and the simulated water levels so the
+# PAGASA rainfall board and the MMDA flood gauge move together, as they would
+# with real sensors. Heavy rain (set by the worst forced node tier) lifts every
+# node's simulated water level to at least one tier below the rain tier.
+# Set to False for fully independent per-node simulation. Real sensor data
+# replaces all of this, so nothing here is needed in the real deployment.
+DEMO_LINK_RAIN_TO_LEVEL = True
+DEMO_RAIN_RANGES = {"none": (0.0, 5.0), "yellow": (7.5, 14.5), "orange": (15.5, 29.0), "red": (30.5, 42.0)}
+
+def demo_rain_tier():
+    return max((_forced_tier[n] for n in NODE_ORDER), key=TIER_ORDER.index)
+
+def effective_tier(node_id):
+    forced = _forced_tier[node_id]
+    if not DEMO_LINK_RAIN_TO_LEVEL:
+        return forced
+    floor = max(TIER_ORDER.index(demo_rain_tier()) - 1, 0)
+    return TIER_ORDER[max(TIER_ORDER.index(forced), floor)]
+
+def rain_from_wobble(wobble):
+    if not DEMO_LINK_RAIN_TO_LEVEL:
+        return round(wobble * 22, 1)
+    lo, hi = DEMO_RAIN_RANGES[demo_rain_tier()]
+    return round(lo + wobble * (hi - lo), 1)
+
 # ESP32-S3 camera modules — assumed on Node 1 and Node 2 (the two
 # flood-relevant spots that need visual confirmation), not on Node 3
 # (rain gauge — nothing to visually verify there). Flag if that's wrong.
@@ -307,8 +332,8 @@ def synth_reading(node_id, tick_offset=0):
     seed = NODE_SEED[node_id]
     t = (datetime.now().timestamp() / 3.0) - tick_offset + seed
     wobble = (math.sin(t * 0.6) + 1) / 2  # 0..1
-    tier = _forced_tier[node_id]
-    ranges = {"none": (0.1, 0.4), "yellow": (0.5, 0.9), "orange": (1.0, 1.7), "red": (1.8, 2.5)}
+    tier = effective_tier(node_id)
+    ranges = {"none": (0.1, 0.25), "yellow": (0.5, 0.9), "orange": (1.0, 1.7), "red": (1.8, 2.5)}
     lo, hi = ranges[tier]
     level = round(lo + wobble * (hi - lo), 2)
 
@@ -368,8 +393,8 @@ DEFAULT_HISTORY_INTERVAL_SECONDS = HISTORY_INTERVALS["10m"]
 
 def node_history_slow(node_id, interval_seconds, count=HISTORY_LEN):
     seed = NODE_SEED[node_id]
-    tier = _forced_tier[node_id]
-    ranges = {"none": (0.1, 0.4), "yellow": (0.5, 0.9), "orange": (1.0, 1.7), "red": (1.8, 2.5)}
+    tier = effective_tier(node_id)
+    ranges = {"none": (0.1, 0.25), "yellow": (0.5, 0.9), "orange": (1.0, 1.7), "red": (1.8, 2.5)}
     lo, hi = ranges[tier]
     flow_lo, flow_hi = (5, 30) if tier in ("none", "yellow") else (25, 75)
     now = datetime.now().timestamp()
@@ -461,7 +486,7 @@ def current_hardware():
 def synth_rain():
     t = datetime.now().timestamp() / 7.0
     wobble = (math.sin(t) + 1) / 2
-    intensity = round(wobble * 22, 1)
+    intensity = rain_from_wobble(wobble)
     return {"intensity": intensity, "today_total": round(intensity * 3.2, 1),
             "timestamp": datetime.now().strftime("%H:%M:%S")}
 
@@ -475,7 +500,7 @@ def rain_label(intensity):
     return "Heavy rain falling now"
 
 def rain_history():
-    return [round(((math.sin((datetime.now().timestamp()/7.0) - i) + 1) / 2) * 22, 1) for i in range(HISTORY_LEN-1, -1, -1)]
+    return [rain_from_wobble((math.sin((datetime.now().timestamp()/7.0) - i) + 1) / 2) for i in range(HISTORY_LEN-1, -1, -1)]
 
 def track_transitions_and_log():
     """Detects tier/hardware changes between polls and appends to the event
@@ -909,7 +934,7 @@ RESEARCHER_HTML = """<!DOCTYPE html>
         .nb-level{ font-family:'IBM Plex Mono',monospace; font-weight:600; font-size:clamp(1.2em,1.9vw,1.8em); line-height:1.1; }
         .nb-level small{ font-size:0.55em; margin-left:3px; opacity:0.85; }
         .nb-tier{ font-size:0.78em; font-weight:700; letter-spacing:0.8px; }
-        @media (max-width:800px){ .nb-chips{ display:none; } }
+        @media (max-width:800px){ .node-banner{ flex-wrap:wrap; } .nb-chips{ order:3; width:100%; } }
             /* ---------- LANGUAGE TOGGLE (body.lang-en / body.lang-ph) ---------- */
         .t-en, .t-ph{ font-style:normal; }
         body.lang-en .t-ph{ display:none; }
@@ -937,6 +962,11 @@ RESEARCHER_HTML = """<!DOCTYPE html>
         .pg-orange.on, .mm-nplv.on{ animation:cardFlash 1.4s ease-in-out infinite; }
         .pg-red.on, .mm-npatv.on{ animation:cardFlash 0.9s ease-in-out infinite; }
         @media (prefers-reduced-motion:reduce){ .pg-card.on, .mm-row.on{ animation:none !important; } }
+            .pg-card .rn{ font-weight:700; font-size:clamp(0.85em,1.15vw,1.08em); margin-top:2px; }
+        .pg-card.on .rn{ color:inherit; }
+        .nb-chip{ font-family:inherit; color:inherit; cursor:pointer; }
+        .nb-chip:hover{ background:rgba(255,255,255,0.42); }
+        .nb-chip:focus-visible{ outline:3px solid currentColor; outline-offset:2px; }
     </style>
 </head>
 <body class="lang-en">
@@ -1020,31 +1050,31 @@ RESEARCHER_HTML = """<!DOCTYPE html>
             <!-- PAGASA: rainfall rate only -->
             <section class="agency" id="pg-panel">
                 <div class="agency-head">
-                    <div><h2><em class="t-en">PAGASA Rainfall Warning</em><em class="t-ph">Babala sa Pag-ulan ng PAGASA</em></h2><div class="src"><em class="t-en">Community status by rainfall rate (mm per hour)</em><em class="t-ph">Katayuan ng komunidad ayon sa lakas ng ulan (mm kada oras)</em></div></div>
+                    <div><h2><em class="t-en">PAGASA-Aligned Rainfall Warning</em><em class="t-ph">Babala sa Pag-ulan (Naaayon sa PAGASA)</em></h2><div class="src"><em class="t-en">Community status by rainfall rate (mm per hour)</em><em class="t-ph">Katayuan ng komunidad ayon sa lakas ng ulan (mm kada oras)</em></div></div>
                     <div class="live-chip"><div class="n" id="pg-rate">--<small>mm/hr</small></div><div class="t" id="pg-status"><em class="t-en">No warning</em><em class="t-ph">Walang babala</em></div></div>
                 </div>
                 <div class="pg-list">
                     <div class="pg-card pg-yellow" id="pg-yellow">
                         <img src="/icons/yellow-advisory.png" alt="Yellow advisory">
                         <div class="tx"><div class="lv"><em class="t-en">Advisory</em><em class="t-ph">Abiso</em> <span><em class="t-en">AWARENESS</em><em class="t-ph">KAMALAYAN</em></span></div>
-                        <div class="rt"><em class="t-en">7.5 - 15 mm within one hour</em><em class="t-ph">7.5 - 15 mm sa loob ng isang oras</em></div><div class="ds"><em class="t-en">Community AWARENESS</em><em class="t-ph">Kamalayan ng Komunidad</em></div></div>
+                        <div class="rt"><em class="t-en">Light</em><em class="t-ph">Mahina</em></div><div class="rn"><em class="t-en">7.5 - 15 mm within one hour</em><em class="t-ph">7.5 - 15 mm sa loob ng isang oras</em></div><div class="ds"><em class="t-en">Community AWARENESS</em><em class="t-ph">Kamalayan ng Komunidad</em></div></div>
                     </div>
                     <div class="pg-card pg-orange" id="pg-orange">
                         <img src="/icons/orange-warning.png" alt="Orange alert">
                         <div class="tx"><div class="lv"><em class="t-en">Alert</em><em class="t-ph">Alerto</em> <span><em class="t-en">PREPAREDNESS</em><em class="t-ph">PAGHAHANDA</em></span></div>
-                        <div class="rt"><em class="t-en">15 - 30 mm within 1 hour</em><em class="t-ph">15 - 30 mm sa loob ng 1 oras</em></div><div class="ds"><em class="t-en">Intense rains. Community PREPAREDNESS</em><em class="t-ph">Matinding pag-ulan. Paghahanda ng Komunidad</em></div></div>
+                        <div class="rt"><em class="t-en">Moderate</em><em class="t-ph">Katamtaman</em></div><div class="rn"><em class="t-en">15 - 30 mm within 1 hour</em><em class="t-ph">15 - 30 mm sa loob ng 1 oras</em></div><div class="ds"><em class="t-en">Intense rains. Community PREPAREDNESS</em><em class="t-ph">Matinding pag-ulan. Paghahanda ng Komunidad</em></div></div>
                     </div>
                     <div class="pg-card pg-red" id="pg-red">
                         <img src="/icons/red-emergency.png" alt="Red emergency">
                         <div class="tx"><div class="lv"><em class="t-en">Emergency</em><em class="t-ph">Emerhensiya</em> <span><em class="t-en">RESPONSE</em><em class="t-ph">TUGON</em></span></div>
-                        <div class="rt"><em class="t-en">More than 30 mm within one hour</em><em class="t-ph">Higit sa 30 mm sa loob ng isang oras</em></div><div class="ds"><em class="t-en">Torrential rainfall. SEVERE flooding is EXPECTED. Community RESPONSE</em><em class="t-ph">Napakalakas na buhos ng ulan. INAASAHAN ang MATINDING pagbaha. Pagtugon ng Komunidad</em></div></div>
+                        <div class="rt"><em class="t-en">Heavy</em><em class="t-ph">Malakas</em></div><div class="rn"><em class="t-en">More than 30 mm within one hour</em><em class="t-ph">Higit sa 30 mm sa loob ng isang oras</em></div><div class="ds"><em class="t-en">Torrential rainfall. SEVERE flooding is EXPECTED. Community RESPONSE</em><em class="t-ph">Napakalakas na buhos ng ulan. INAASAHAN ang MATINDING pagbaha. Pagtugon ng Komunidad</em></div></div>
                     </div>
                 </div>
             </section>
             <!-- MMDA: flood depth only. Rows listed top = deepest. -->
             <section class="agency" id="mm-panel">
                 <div class="agency-head">
-                    <div><h2><em class="t-en">MMDA Flood Gauge</em><em class="t-ph">Sukatan ng Baha ng MMDA</em></h2><div class="src"><em class="t-en">Official standard flood level (depth in inches)</em><em class="t-ph">Opisyal na pamantayang antas ng baha (lalim sa pulgada)</em></div></div>
+                    <div><h2><em class="t-en">MMDA-Aligned Flood Gauge</em><em class="t-ph">Sukatan ng Baha (Naaayon sa MMDA)</em></h2><div class="src"><em class="t-en">Official standard flood level (depth in inches) &middot; within one hour</em><em class="t-ph">Opisyal na pamantayang antas ng baha (lalim sa pulgada) &middot; sa loob ng isang oras</em></div></div>
                     <div class="live-chip"><div class="n" id="mm-in">--<small><em class="t-en">in</em><em class="t-ph">pulg</em></small></div><div class="t" id="mm-name"><em class="t-en">Below gutter level</em><em class="t-ph">Mas mababa sa gutter</em></div></div>
                 </div>
                 <div class="mm-wrap">
@@ -1784,6 +1814,10 @@ RESEARCHER_HTML = """<!DOCTYPE html>
         const NB_TIER = { none:['NORMAL','#3fb985','#ffffff'], yellow:['YELLOW \u00b7 ADVISORY','#F4C430','#3a2d00'],
                           orange:['ORANGE \u00b7 ALERT','#F2994A','#ffffff'], red:['RED \u00b7 EMERGENCY','#E14B4B','#ffffff'] };
         let nbLastNode = null;
+        document.addEventListener('click', function(e){
+            const b = e.target.closest ? e.target.closest('.nb-chip') : null;
+            if (b && b.dataset.node) selectNode(b.dataset.node);
+        });
         function renderNodeBanner(nid, data){
             const el = document.getElementById('node-banner'); if (!el || !NODE_META[nid]) return;
             const m = NODE_META[nid];
@@ -1795,7 +1829,7 @@ RESEARCHER_HTML = """<!DOCTYPE html>
             document.getElementById('nb-tier').textContent = t[0];
             if (data && data.status && data.status[nid]) document.getElementById('nb-level').textContent = data.status[nid].water_level;
             document.getElementById('nb-chips').innerHTML = NODE_ORDER_JS.map(function(n){
-                return '<span class="nb-chip' + (n === nid ? ' on' : '') + '"><i></i>' + NODE_META[n].label + '</span>';
+                return '<button type="button" class="nb-chip' + (n === nid ? ' on' : '') + '" data-node="' + n + '" title="Show ' + NODE_META[n].label + '"><i></i>' + NODE_META[n].label + '</button>';
             }).join('');
             if (nbLastNode !== nid){ el.classList.remove('swap'); void el.offsetWidth; el.classList.add('swap'); nbLastNode = nid; }
         }
@@ -2445,7 +2479,7 @@ BARANGAY_HTML = """<!DOCTYPE html>
         .nb-level{ font-family:'IBM Plex Mono',monospace; font-weight:600; font-size:clamp(1.2em,1.9vw,1.8em); line-height:1.1; }
         .nb-level small{ font-size:0.55em; margin-left:3px; opacity:0.85; }
         .nb-tier{ font-size:0.78em; font-weight:700; letter-spacing:0.8px; }
-        @media (max-width:800px){ .nb-chips{ display:none; } }
+        @media (max-width:800px){ .node-banner{ flex-wrap:wrap; } .nb-chips{ order:3; width:100%; } }
             /* ---------- LANGUAGE TOGGLE (body.lang-en / body.lang-ph) ---------- */
         .t-en, .t-ph{ font-style:normal; }
         body.lang-en .t-ph{ display:none; }
@@ -2473,6 +2507,11 @@ BARANGAY_HTML = """<!DOCTYPE html>
         .pg-orange.on, .mm-nplv.on{ animation:cardFlash 1.4s ease-in-out infinite; }
         .pg-red.on, .mm-npatv.on{ animation:cardFlash 0.9s ease-in-out infinite; }
         @media (prefers-reduced-motion:reduce){ .pg-card.on, .mm-row.on{ animation:none !important; } }
+            .pg-card .rn{ font-weight:700; font-size:clamp(0.85em,1.15vw,1.08em); margin-top:2px; }
+        .pg-card.on .rn{ color:inherit; }
+        .nb-chip{ font-family:inherit; color:inherit; cursor:pointer; }
+        .nb-chip:hover{ background:rgba(255,255,255,0.42); }
+        .nb-chip:focus-visible{ outline:3px solid currentColor; outline-offset:2px; }
     </style>
 </head>
 <body class="lang-en">
@@ -2553,31 +2592,31 @@ BARANGAY_HTML = """<!DOCTYPE html>
             <!-- PAGASA: rainfall rate only -->
             <section class="agency" id="pg-panel">
                 <div class="agency-head">
-                    <div><h2><em class="t-en">PAGASA Rainfall Warning</em><em class="t-ph">Babala sa Pag-ulan ng PAGASA</em></h2><div class="src"><em class="t-en">Community status by rainfall rate (mm per hour)</em><em class="t-ph">Katayuan ng komunidad ayon sa lakas ng ulan (mm kada oras)</em></div></div>
+                    <div><h2><em class="t-en">PAGASA-Aligned Rainfall Warning</em><em class="t-ph">Babala sa Pag-ulan (Naaayon sa PAGASA)</em></h2><div class="src"><em class="t-en">Community status by rainfall rate (mm per hour)</em><em class="t-ph">Katayuan ng komunidad ayon sa lakas ng ulan (mm kada oras)</em></div></div>
                     <div class="live-chip"><div class="n" id="pg-rate">--<small>mm/hr</small></div><div class="t" id="pg-status"><em class="t-en">No warning</em><em class="t-ph">Walang babala</em></div></div>
                 </div>
                 <div class="pg-list">
                     <div class="pg-card pg-yellow" id="pg-yellow">
                         <img src="/icons/yellow-advisory.png" alt="Yellow advisory">
                         <div class="tx"><div class="lv"><em class="t-en">Advisory</em><em class="t-ph">Abiso</em> <span><em class="t-en">AWARENESS</em><em class="t-ph">KAMALAYAN</em></span></div>
-                        <div class="rt"><em class="t-en">7.5 - 15 mm within one hour</em><em class="t-ph">7.5 - 15 mm sa loob ng isang oras</em></div><div class="ds"><em class="t-en">Community AWARENESS</em><em class="t-ph">Kamalayan ng Komunidad</em></div></div>
+                        <div class="rt"><em class="t-en">Light</em><em class="t-ph">Mahina</em></div><div class="rn"><em class="t-en">7.5 - 15 mm within one hour</em><em class="t-ph">7.5 - 15 mm sa loob ng isang oras</em></div><div class="ds"><em class="t-en">Community AWARENESS</em><em class="t-ph">Kamalayan ng Komunidad</em></div></div>
                     </div>
                     <div class="pg-card pg-orange" id="pg-orange">
                         <img src="/icons/orange-warning.png" alt="Orange alert">
                         <div class="tx"><div class="lv"><em class="t-en">Alert</em><em class="t-ph">Alerto</em> <span><em class="t-en">PREPAREDNESS</em><em class="t-ph">PAGHAHANDA</em></span></div>
-                        <div class="rt"><em class="t-en">15 - 30 mm within 1 hour</em><em class="t-ph">15 - 30 mm sa loob ng 1 oras</em></div><div class="ds"><em class="t-en">Intense rains. Community PREPAREDNESS</em><em class="t-ph">Matinding pag-ulan. Paghahanda ng Komunidad</em></div></div>
+                        <div class="rt"><em class="t-en">Moderate</em><em class="t-ph">Katamtaman</em></div><div class="rn"><em class="t-en">15 - 30 mm within 1 hour</em><em class="t-ph">15 - 30 mm sa loob ng 1 oras</em></div><div class="ds"><em class="t-en">Intense rains. Community PREPAREDNESS</em><em class="t-ph">Matinding pag-ulan. Paghahanda ng Komunidad</em></div></div>
                     </div>
                     <div class="pg-card pg-red" id="pg-red">
                         <img src="/icons/red-emergency.png" alt="Red emergency">
                         <div class="tx"><div class="lv"><em class="t-en">Emergency</em><em class="t-ph">Emerhensiya</em> <span><em class="t-en">RESPONSE</em><em class="t-ph">TUGON</em></span></div>
-                        <div class="rt"><em class="t-en">More than 30 mm within one hour</em><em class="t-ph">Higit sa 30 mm sa loob ng isang oras</em></div><div class="ds"><em class="t-en">Torrential rainfall. SEVERE flooding is EXPECTED. Community RESPONSE</em><em class="t-ph">Napakalakas na buhos ng ulan. INAASAHAN ang MATINDING pagbaha. Pagtugon ng Komunidad</em></div></div>
+                        <div class="rt"><em class="t-en">Heavy</em><em class="t-ph">Malakas</em></div><div class="rn"><em class="t-en">More than 30 mm within one hour</em><em class="t-ph">Higit sa 30 mm sa loob ng isang oras</em></div><div class="ds"><em class="t-en">Torrential rainfall. SEVERE flooding is EXPECTED. Community RESPONSE</em><em class="t-ph">Napakalakas na buhos ng ulan. INAASAHAN ang MATINDING pagbaha. Pagtugon ng Komunidad</em></div></div>
                     </div>
                 </div>
             </section>
             <!-- MMDA: flood depth only. Rows listed top = deepest. -->
             <section class="agency" id="mm-panel">
                 <div class="agency-head">
-                    <div><h2><em class="t-en">MMDA Flood Gauge</em><em class="t-ph">Sukatan ng Baha ng MMDA</em></h2><div class="src"><em class="t-en">Official standard flood level (depth in inches)</em><em class="t-ph">Opisyal na pamantayang antas ng baha (lalim sa pulgada)</em></div></div>
+                    <div><h2><em class="t-en">MMDA-Aligned Flood Gauge</em><em class="t-ph">Sukatan ng Baha (Naaayon sa MMDA)</em></h2><div class="src"><em class="t-en">Official standard flood level (depth in inches) &middot; within one hour</em><em class="t-ph">Opisyal na pamantayang antas ng baha (lalim sa pulgada) &middot; sa loob ng isang oras</em></div></div>
                     <div class="live-chip"><div class="n" id="mm-in">--<small><em class="t-en">in</em><em class="t-ph">pulg</em></small></div><div class="t" id="mm-name"><em class="t-en">Below gutter level</em><em class="t-ph">Mas mababa sa gutter</em></div></div>
                 </div>
                 <div class="mm-wrap">
@@ -3193,6 +3232,10 @@ BARANGAY_HTML = """<!DOCTYPE html>
         const NB_TIER = { none:['NORMAL','#3fb985','#ffffff'], yellow:['YELLOW \u00b7 ADVISORY','#F4C430','#3a2d00'],
                           orange:['ORANGE \u00b7 ALERT','#F2994A','#ffffff'], red:['RED \u00b7 EMERGENCY','#E14B4B','#ffffff'] };
         let nbLastNode = null;
+        document.addEventListener('click', function(e){
+            const b = e.target.closest ? e.target.closest('.nb-chip') : null;
+            if (b && b.dataset.node) selectNode(b.dataset.node);
+        });
         function renderNodeBanner(nid, data){
             const el = document.getElementById('node-banner'); if (!el || !NODE_META[nid]) return;
             const m = NODE_META[nid];
@@ -3204,7 +3247,7 @@ BARANGAY_HTML = """<!DOCTYPE html>
             document.getElementById('nb-tier').textContent = t[0];
             if (data && data.status && data.status[nid]) document.getElementById('nb-level').textContent = data.status[nid].water_level;
             document.getElementById('nb-chips').innerHTML = NODE_ORDER_JS.map(function(n){
-                return '<span class="nb-chip' + (n === nid ? ' on' : '') + '"><i></i>' + NODE_META[n].label + '</span>';
+                return '<button type="button" class="nb-chip' + (n === nid ? ' on' : '') + '" data-node="' + n + '" title="Show ' + NODE_META[n].label + '"><i></i>' + NODE_META[n].label + '</button>';
             }).join('');
             if (nbLastNode !== nid){ el.classList.remove('swap'); void el.offsetWidth; el.classList.add('swap'); nbLastNode = nid; }
         }
