@@ -80,6 +80,19 @@ def login_required(roles=None):
 CARTO_API_KEY = os.environ.get("CARTO_API_KEY", "")
 
 SIMULATION_MODE = "normal"
+
+# ==============================================================================
+# HARDWARE_CONNECTED — master switch for the thesis demo
+# ------------------------------------------------------------------------------
+#   False (default) -> no ESP nodes are wired in, so every sensor value reads
+#                      ZERO (water level, flow, rain, temperature, humidity),
+#                      ESP devices show OFFLINE, and AI confidence/risk are 0.
+#   True            -> the app uses the data path below (simulated waves now;
+#                      swap in real ESP32 reads / the LoRaWAN webhook values
+#                      here when the hardware is ready).
+# Flip it without editing code:  set APAW_HARDWARE_CONNECTED=1  (or "true").
+# ==============================================================================
+HARDWARE_CONNECTED = os.environ.get("APAW_HARDWARE_CONNECTED", "0").strip().lower() in ("1", "true", "yes", "on")
 HISTORY_LEN = 12
 METRICS = ["water_level", "water_flow", "rainfall", "temperature", "humidity"]
 
@@ -173,7 +186,10 @@ node_snapshots = {nid: {"last_captured": None, "requested_count": 0} for nid in 
 
 event_log = []       # most-recent-first when displayed
 _last_tier_seen = {"node1": "none", "node2": "none"}
-_last_hw_seen = {"esp1": "online", "esp2": "online", "esp3": "online", "pi": "online"}
+_last_hw_seen = {"esp1": "online" if HARDWARE_CONNECTED else "offline",
+                 "esp2": "online" if HARDWARE_CONNECTED else "offline",
+                 "esp3": "online" if HARDWARE_CONNECTED else "offline",
+                 "pi": "online"}
 telemetry_buffer = []
 TELEMETRY_BUFFER_LEN = 2000
 
@@ -329,6 +345,11 @@ def synth_reading(node_id, tick_offset=0):
     keep the same dict keys so nothing downstream (API payload, both
     dashboards) needs to change.
     """
+    if not HARDWARE_CONNECTED:
+        return {
+            "water_level": 0.0, "water_flow": 0.0, "humidity": 0.0, "temperature": 0.0,
+            "tier": "none", "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
     seed = NODE_SEED[node_id]
     t = (datetime.now().timestamp() / 3.0) - tick_offset + seed
     wobble = (math.sin(t * 0.6) + 1) / 2  # 0..1
@@ -392,13 +413,22 @@ HISTORY_INTERVALS = {"5m": 300, "10m": 600, "30m": 1800, "1h": 3600}
 DEFAULT_HISTORY_INTERVAL_SECONDS = HISTORY_INTERVALS["10m"]
 
 def node_history_slow(node_id, interval_seconds, count=HISTORY_LEN):
+    now = datetime.now().timestamp()
+    fmt = "%H:%M" if interval_seconds < 3600 else "%b %d, %H:%M"
+    if not HARDWARE_CONNECTED:
+        zeros = [0.0] * count
+        return {
+            "water_level": list(zeros), "water_flow": list(zeros),
+            "humidity": list(zeros), "temperature": list(zeros),
+            "times": [datetime.fromtimestamp(now - i * interval_seconds).strftime(fmt)
+                      for i in range(count - 1, -1, -1)],
+            "tier": "none",
+        }
     seed = NODE_SEED[node_id]
     tier = effective_tier(node_id)
     ranges = {"none": (0.1, 0.25), "yellow": (0.5, 0.9), "orange": (1.0, 1.7), "red": (1.8, 2.5)}
     lo, hi = ranges[tier]
     flow_lo, flow_hi = (5, 30) if tier in ("none", "yellow") else (25, 75)
-    now = datetime.now().timestamp()
-    fmt = "%H:%M" if interval_seconds < 3600 else "%b %d, %H:%M"
 
     water_level, water_flow, humidity, temperature, times = [], [], [], [], []
     for i in range(count - 1, -1, -1):
@@ -446,6 +476,8 @@ def ai_confidence_for(tier):
     """Placeholder for the trained edge-AI classifier's own reported
     confidence. Steady-state/fully-flooded reads as decisive; the
     transitional bands (Yellow/Orange) are inherently more uncertain."""
+    if not HARDWARE_CONNECTED:
+        return 0.0
     seed = (int(datetime.now().timestamp()) // 3) % 100
     if tier in ("none", "red"):
         return round(87 + (seed % 12), 1)
@@ -465,6 +497,13 @@ def synth_hw(dev_id):
     t = datetime.now().timestamp() / 5.0
     wobble = (math.sin(t + hash(dev_id) % 7) + 1) / 2
     dev["status"] = forced if forced else "online"
+    if dev["kind"] == "esp" and not HARDWARE_CONNECTED:
+        # No physical ESP32 wired in yet: show it as disconnected with zeroed readings.
+        dev["status"] = "offline"
+        dev["battery_pct"] = 0.0
+        dev["latency_ms"] = 0.0
+        dev["last_heartbeat"] = "—"
+        return dev
     if dev["kind"] == "esp":
         dev["battery_pct"] = round(max(4.0, dev["battery_pct"] - wobble * 2), 1)
         dev["latency_ms"] = round(20 + wobble * 40, 1)
@@ -484,6 +523,9 @@ def current_hardware():
     return {dev_id: synth_hw(dev_id) for dev_id in HARDWARE}
 
 def synth_rain():
+    if not HARDWARE_CONNECTED:
+        return {"intensity": 0.0, "today_total": 0.0,
+                "timestamp": datetime.now().strftime("%H:%M:%S")}
     t = datetime.now().timestamp() / 7.0
     wobble = (math.sin(t) + 1) / 2
     intensity = rain_from_wobble(wobble)
@@ -500,6 +542,8 @@ def rain_label(intensity):
     return "Heavy rain falling now"
 
 def rain_history():
+    if not HARDWARE_CONNECTED:
+        return [0.0] * HISTORY_LEN
     return [rain_from_wobble((math.sin((datetime.now().timestamp()/7.0) - i) + 1) / 2) for i in range(HISTORY_LEN-1, -1, -1)]
 
 def track_transitions_and_log():
@@ -544,6 +588,9 @@ def compute_ai_prediction(nid):
     tier = risk_tier(synth_reading(nid)["water_level"])
     eta = eta_minutes_to_red(nid)
     label = NODE_META[nid]["label"]
+    if not HARDWARE_CONNECTED:
+        return {"risk_score": 0, "tier": "none", "eta_minutes": None,
+                "narrative": "No sensor data from " + label + " — waiting for hardware to connect."}
     if tier == "red":
         narrative = "Flooding is happening now at " + label + "."
     elif eta is None:
@@ -579,6 +626,8 @@ LAYMAN_COPY_TL = {
 }
 
 def outlook_for(node_id, tier):
+    if not HARDWARE_CONNECTED:
+        return "Walang datos mula sa sensor — hinihintay ang koneksyon ng hardware."
     if tier == "red":
         return "Nangyayari na ang pagbaha — huwag nang maghintay pa."
     eta = eta_minutes_to_red(node_id)
