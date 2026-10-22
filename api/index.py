@@ -2,6 +2,10 @@ LOGO_B64 = "iVBORw0KGgoAAAANSUhEUgAAAPAAAADwCAYAAAA+VemSAACHWklEQVR4nOy9d3xVx5n/
 
 import csv
 import io
+import json
+import sqlite3
+import threading
+import time
 import random
 import base64
 import math
@@ -12,6 +16,7 @@ from functools import wraps
 from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 6 * 1024 * 1024  # reject uploads bigger than 6 MB
 
 # ==============================================================================
 # AUTH — session-based login, two internal roles ("official", "researcher")
@@ -80,19 +85,6 @@ def login_required(roles=None):
 CARTO_API_KEY = os.environ.get("CARTO_API_KEY", "")
 
 SIMULATION_MODE = "normal"
-
-# ==============================================================================
-# HARDWARE_CONNECTED — master switch for the thesis demo
-# ------------------------------------------------------------------------------
-#   False (default) -> no ESP nodes are wired in, so every sensor value reads
-#                      ZERO (water level, flow, rain, temperature, humidity),
-#                      ESP devices show OFFLINE, and AI confidence/risk are 0.
-#   True            -> the app uses the data path below (simulated waves now;
-#                      swap in real ESP32 reads / the LoRaWAN webhook values
-#                      here when the hardware is ready).
-# Flip it without editing code:  set APAW_HARDWARE_CONNECTED=1  (or "true").
-# ==============================================================================
-HARDWARE_CONNECTED = os.environ.get("APAW_HARDWARE_CONNECTED", "0").strip().lower() in ("1", "true", "yes", "on")
 HISTORY_LEN = 12
 METRICS = ["water_level", "water_flow", "rainfall", "temperature", "humidity"]
 
@@ -186,10 +178,7 @@ node_snapshots = {nid: {"last_captured": None, "requested_count": 0} for nid in 
 
 event_log = []       # most-recent-first when displayed
 _last_tier_seen = {"node1": "none", "node2": "none"}
-_last_hw_seen = {"esp1": "online" if HARDWARE_CONNECTED else "offline",
-                 "esp2": "online" if HARDWARE_CONNECTED else "offline",
-                 "esp3": "online" if HARDWARE_CONNECTED else "offline",
-                 "pi": "online"}
+_last_hw_seen = {"esp1": "online", "esp2": "online", "esp3": "online", "pi": "online"}
 telemetry_buffer = []
 TELEMETRY_BUFFER_LEN = 2000
 
@@ -216,6 +205,164 @@ TELEMETRY_BUFFER_LEN = 2000
 # external store (Vercel KV/Postgres/etc.) instead of trusting local
 # memory or disk to survive.
 # ==============================================================================
+# ==============================================================================
+# SQLITE STORAGE - one file (data/apaw.db) that survives restarts and reboots.
+# Stores: sensor history (readings), resident reports (with photos), the event
+# log, and settings (thresholds, node names/coordinates, snapshot counters).
+# The in-memory lists above stay as a fast cache; the database is the record.
+# Every database call is wrapped so a database problem can never crash a page.
+# On hosts with a read-only disk (Vercel) it falls back to /tmp, which is wiped
+# between runs - there, use the Raspberry Pi for real data retention.
+# ==============================================================================
+DATA_DIR = os.environ.get("APAW_DATA_DIR") or os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(DATA_DIR, "apaw.db")
+DB_OK = False
+MAX_REPORTS_IN_MEMORY = 30   # newest reports kept in RAM; all of them stay in the database
+_db_lock = threading.Lock()
+_history_lock = threading.Lock()
+
+DB_SCHEMA = """
+CREATE TABLE IF NOT EXISTS readings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, day TEXT NOT NULL, node TEXT NOT NULL,
+    node_label TEXT, water_level_m REAL, water_flow_lmin REAL, humidity_pct REAL,
+    temperature_c REAL, tier TEXT, rain_mm_hr REAL, UNIQUE (ts, node));
+CREATE INDEX IF NOT EXISTS idx_readings_day ON readings (day);
+CREATE TABLE IF NOT EXISTS reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, created TEXT NOT NULL, time_label TEXT, node TEXT,
+    report_type TEXT, comment TEXT, image_b64 TEXT, status TEXT DEFAULT 'Pending');
+CREATE TABLE IF NOT EXISTS events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, created TEXT NOT NULL, time_label TEXT, level TEXT, msg TEXT);
+CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+"""
+
+def db_run(sql, params=(), many=False, fetch=False):
+    """Run one statement. Returns rows (fetch=True) or the new row id; None if the DB is unavailable."""
+    if not DB_OK:
+        return None
+    try:
+        with _db_lock:
+            conn = sqlite3.connect(DB_PATH, timeout=10)
+            conn.row_factory = sqlite3.Row
+            try:
+                cur = conn.executemany(sql, params) if many else conn.execute(sql, params)
+                result = [dict(r) for r in cur.fetchall()] if fetch else cur.lastrowid
+                conn.commit()
+                return result
+            finally:
+                conn.close()
+    except sqlite3.Error:
+        return None
+
+def init_db():
+    global DB_OK, DB_PATH
+    for candidate in (DB_PATH, "/tmp/apaw.db"):
+        try:
+            os.makedirs(os.path.dirname(candidate), exist_ok=True)
+            conn = sqlite3.connect(candidate, timeout=10)
+            try:
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.executescript(DB_SCHEMA)
+                conn.commit()
+            finally:
+                conn.close()
+            DB_PATH = candidate
+            DB_OK = True
+            return
+        except (sqlite3.Error, OSError):
+            continue
+    DB_OK = False
+
+def db_set(key, obj):
+    db_run("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, json.dumps(obj)))
+
+def db_get(key):
+    rows = db_run("SELECT value FROM settings WHERE key = ?", (key,), fetch=True)
+    try:
+        return json.loads(rows[0]["value"]) if rows else None
+    except (ValueError, KeyError):
+        return None
+
+_READING_COLS = ("water_level_m", "water_flow_lmin", "humidity_pct", "temperature_c", "tier", "rain_mm_hr")
+
+def db_insert_readings(day_key, rows):
+    vals = []
+    for r in rows:
+        vals.append((r["timestamp"], day_key, r["node"], r.get("node_label"))
+                    + tuple((None if r.get(c) in ("", None) else r.get(c)) for c in _READING_COLS))
+    db_run("INSERT OR IGNORE INTO readings (ts, day, node, node_label, water_level_m, water_flow_lmin, "
+           "humidity_pct, temperature_c, tier, rain_mm_hr) VALUES (?,?,?,?,?,?,?,?,?,?)", vals, many=True)
+
+def db_load_day(day_key):
+    rows = db_run("SELECT * FROM readings WHERE day = ? ORDER BY ts, id", (day_key,), fetch=True) or []
+    out = []
+    for r in rows:
+        d = {"timestamp": r["ts"], "node": r["node"], "node_label": r["node_label"]}
+        for c in _READING_COLS:
+            d[c] = "" if r[c] is None else r[c]
+        out.append(d)
+    return out
+
+def db_report_row_to_dict(r):
+    return {"id": r["id"], "image_data": r["image_b64"] or "", "node": r["node"] or "",
+            "report_type": r["report_type"] or "baha", "comment": r["comment"] or "",
+            "time": r["time_label"] or "", "status": r["status"] or "Pending"}
+
+def load_persisted_state():
+    """Runs once at startup: restores everything the app keeps in memory."""
+    if not DB_OK:
+        return
+    saved = db_get("thresholds")
+    if isinstance(saved, dict):
+        try:
+            y, o, rd = float(saved["yellow"]), float(saved["orange"]), float(saved["red"])
+            if y < o < rd:
+                TIER_THRESHOLDS.update({"yellow": y, "orange": o, "red": rd})
+        except (KeyError, TypeError, ValueError):
+            pass
+    cfg = db_get("node_config")
+    if isinstance(cfg, dict):
+        for nid, c in cfg.items():
+            if nid in NODE_META and isinstance(c, dict):
+                for k in ("label", "lat", "lng"):
+                    if k in c:
+                        NODE_META[nid][k] = c[k]
+                ALL_META[nid] = NODE_META[nid]
+    snaps = db_get("node_snapshots")
+    if isinstance(snaps, dict):
+        for nid, s in snaps.items():
+            if nid in node_snapshots and isinstance(s, dict):
+                node_snapshots[nid].update({"last_captured": s.get("last_captured"),
+                                            "requested_count": int(s.get("requested_count", 0))})
+    rep = db_run("SELECT * FROM reports ORDER BY id DESC LIMIT ?", (MAX_REPORTS_IN_MEMORY,), fetch=True) or []
+    resident_reports[:] = [db_report_row_to_dict(r) for r in reversed(rep)]
+    ev = db_run("SELECT time_label, level, msg FROM events ORDER BY id DESC LIMIT 300", fetch=True) or []
+    event_log[:] = [{"ts": e["time_label"], "level": e["level"], "msg": e["msg"]} for e in reversed(ev)]
+    db_run("DELETE FROM events WHERE id < (SELECT COALESCE(MAX(id), 0) - 5000 FROM events)")
+    today = datetime.now().strftime("%Y-%m-%d")
+    today_rows = db_load_day(today)
+    if today_rows:
+        daily_history[today] = today_rows
+        try:
+            last = max(datetime.strptime(r["timestamp"], "%Y-%m-%d %H:%M:%S") for r in today_rows)
+            _last_sample_boundary["ts"] = int(last.timestamp())
+        except ValueError:
+            pass
+
+def _background_logger():
+    """Records the 5-minute history sample even when no dashboard tab is open."""
+    while True:
+        try:
+            record_history_sample_if_due()
+        except Exception:
+            pass
+        time.sleep(20)
+
+def start_background_logger():
+    if os.environ.get("VERCEL") or getattr(app, "_apaw_logger_started", False):
+        return
+    app._apaw_logger_started = True
+    threading.Thread(target=_background_logger, daemon=True, name="apaw-logger").start()
+
 HISTORY_LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "history_logs")
 try:
     os.makedirs(HISTORY_LOG_DIR, exist_ok=True)
@@ -253,6 +400,9 @@ def _load_history_rows_for_day(day_key):
     the on-disk backup, e.g. after a restart earlier the same day."""
     if day_key in daily_history:
         return daily_history[day_key]
+    db_rows = db_load_day(day_key)
+    if db_rows:
+        return db_rows
     path = _history_log_path(day_key)
     if os.path.exists(path):
         try:
@@ -263,6 +413,10 @@ def _load_history_rows_for_day(day_key):
     return []
 
 def record_history_sample_if_due():
+    with _history_lock:
+        _record_history_sample_locked()
+
+def _record_history_sample_locked():
     """Called on every /api/status poll (~every 3s while a dashboard tab is
     open). The moment wall-clock time crosses into a new 5-minute grid
     boundary, records exactly one reading per node (+ the rain gauge) for
@@ -296,6 +450,7 @@ def record_history_sample_if_due():
 
     daily_history.setdefault(day_key, []).extend(new_rows)
     _append_history_rows_to_disk(day_key, new_rows)
+    db_insert_readings(day_key, new_rows)
 
 def history_report_rows(day_key, interval_seconds, node_filter="all"):
     """Rows for day_key, filtered to the chosen interval's grid and
@@ -317,6 +472,8 @@ def history_report_rows(day_key, interval_seconds, node_filter="all"):
 
 def log_event(level, msg):
     event_log.append({"ts": datetime.now().strftime("%H:%M:%S"), "level": level, "msg": msg})
+    db_run("INSERT INTO events (created, time_label, level, msg) VALUES (?,?,?,?)",
+           (datetime.now().isoformat(sep=" ", timespec="seconds"), datetime.now().strftime("%H:%M:%S"), level, msg))
     if len(event_log) > 300:
         del event_log[0]
 
@@ -345,11 +502,6 @@ def synth_reading(node_id, tick_offset=0):
     keep the same dict keys so nothing downstream (API payload, both
     dashboards) needs to change.
     """
-    if not HARDWARE_CONNECTED:
-        return {
-            "water_level": 0.0, "water_flow": 0.0, "humidity": 0.0, "temperature": 0.0,
-            "tier": "none", "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        }
     seed = NODE_SEED[node_id]
     t = (datetime.now().timestamp() / 3.0) - tick_offset + seed
     wobble = (math.sin(t * 0.6) + 1) / 2  # 0..1
@@ -413,22 +565,13 @@ HISTORY_INTERVALS = {"5m": 300, "10m": 600, "30m": 1800, "1h": 3600}
 DEFAULT_HISTORY_INTERVAL_SECONDS = HISTORY_INTERVALS["10m"]
 
 def node_history_slow(node_id, interval_seconds, count=HISTORY_LEN):
-    now = datetime.now().timestamp()
-    fmt = "%H:%M" if interval_seconds < 3600 else "%b %d, %H:%M"
-    if not HARDWARE_CONNECTED:
-        zeros = [0.0] * count
-        return {
-            "water_level": list(zeros), "water_flow": list(zeros),
-            "humidity": list(zeros), "temperature": list(zeros),
-            "times": [datetime.fromtimestamp(now - i * interval_seconds).strftime(fmt)
-                      for i in range(count - 1, -1, -1)],
-            "tier": "none",
-        }
     seed = NODE_SEED[node_id]
     tier = effective_tier(node_id)
     ranges = {"none": (0.1, 0.25), "yellow": (0.5, 0.9), "orange": (1.0, 1.7), "red": (1.8, 2.5)}
     lo, hi = ranges[tier]
     flow_lo, flow_hi = (5, 30) if tier in ("none", "yellow") else (25, 75)
+    now = datetime.now().timestamp()
+    fmt = "%H:%M" if interval_seconds < 3600 else "%b %d, %H:%M"
 
     water_level, water_flow, humidity, temperature, times = [], [], [], [], []
     for i in range(count - 1, -1, -1):
@@ -476,8 +619,6 @@ def ai_confidence_for(tier):
     """Placeholder for the trained edge-AI classifier's own reported
     confidence. Steady-state/fully-flooded reads as decisive; the
     transitional bands (Yellow/Orange) are inherently more uncertain."""
-    if not HARDWARE_CONNECTED:
-        return 0.0
     seed = (int(datetime.now().timestamp()) // 3) % 100
     if tier in ("none", "red"):
         return round(87 + (seed % 12), 1)
@@ -497,13 +638,6 @@ def synth_hw(dev_id):
     t = datetime.now().timestamp() / 5.0
     wobble = (math.sin(t + hash(dev_id) % 7) + 1) / 2
     dev["status"] = forced if forced else "online"
-    if dev["kind"] == "esp" and not HARDWARE_CONNECTED:
-        # No physical ESP32 wired in yet: show it as disconnected with zeroed readings.
-        dev["status"] = "offline"
-        dev["battery_pct"] = 0.0
-        dev["latency_ms"] = 0.0
-        dev["last_heartbeat"] = "—"
-        return dev
     if dev["kind"] == "esp":
         dev["battery_pct"] = round(max(4.0, dev["battery_pct"] - wobble * 2), 1)
         dev["latency_ms"] = round(20 + wobble * 40, 1)
@@ -523,9 +657,6 @@ def current_hardware():
     return {dev_id: synth_hw(dev_id) for dev_id in HARDWARE}
 
 def synth_rain():
-    if not HARDWARE_CONNECTED:
-        return {"intensity": 0.0, "today_total": 0.0,
-                "timestamp": datetime.now().strftime("%H:%M:%S")}
     t = datetime.now().timestamp() / 7.0
     wobble = (math.sin(t) + 1) / 2
     intensity = rain_from_wobble(wobble)
@@ -542,8 +673,6 @@ def rain_label(intensity):
     return "Heavy rain falling now"
 
 def rain_history():
-    if not HARDWARE_CONNECTED:
-        return [0.0] * HISTORY_LEN
     return [rain_from_wobble((math.sin((datetime.now().timestamp()/7.0) - i) + 1) / 2) for i in range(HISTORY_LEN-1, -1, -1)]
 
 def track_transitions_and_log():
@@ -588,9 +717,6 @@ def compute_ai_prediction(nid):
     tier = risk_tier(synth_reading(nid)["water_level"])
     eta = eta_minutes_to_red(nid)
     label = NODE_META[nid]["label"]
-    if not HARDWARE_CONNECTED:
-        return {"risk_score": 0, "tier": "none", "eta_minutes": None,
-                "narrative": "No sensor data from " + label + " — waiting for hardware to connect."}
     if tier == "red":
         narrative = "Flooding is happening now at " + label + "."
     elif eta is None:
@@ -626,8 +752,6 @@ LAYMAN_COPY_TL = {
 }
 
 def outlook_for(node_id, tier):
-    if not HARDWARE_CONNECTED:
-        return "Walang datos mula sa sensor — hinihintay ang koneksyon ng hardware."
     if tier == "red":
         return "Nangyayari na ang pagbaha — huwag nang maghintay pa."
     eta = eta_minutes_to_red(node_id)
@@ -1016,6 +1140,27 @@ RESEARCHER_HTML = """<!DOCTYPE html>
         .nb-chip{ font-family:inherit; color:inherit; cursor:pointer; }
         .nb-chip:hover{ background:rgba(255,255,255,0.42); }
         .nb-chip:focus-visible{ outline:3px solid currentColor; outline-offset:2px; }
+            /* ---------- GAUGE REVISION: water tank, ranges, ft+in, MMDA first ---------- */
+        @media (min-width:1001px){ .agency-split{ grid-template-columns:1.15fr 1fr; } }
+        .agency{ display:flex; flex-direction:column; }
+        .pg-list{ flex:1; justify-content:space-between; }
+        .pg-card{ flex:1; }
+        .live-chip .ft{ font-size:0.78em; font-weight:600; opacity:0.92; }
+        .mm-wrap{ flex:1; min-height:clamp(340px,46vh,480px); gap:12px; }
+        .mm-tank{ position:relative; width:clamp(92px,9vw,130px); flex-shrink:0; overflow:hidden; border-radius:14px; border:2px solid var(--line);
+                  background:linear-gradient(180deg,#0e2238,#12304d); }
+        .mm-tank .mm-fill{ background:linear-gradient(0deg, color-mix(in srgb, var(--ac, #3fb985) 72%, #000), var(--ac, #3fb985)); transition:height .9s cubic-bezier(.3,.8,.3,1), background .4s; z-index:1; }
+        .mm-tank .mm-fill::before{ content:''; position:absolute; left:0; right:0; top:-9px; height:10px; background:var(--ac, #3fb985);
+            -webkit-mask:url('data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20width%3D%2240%22%20height%3D%2210%22%20viewBox%3D%220%200%2040%2010%22%3E%3Cpath%20d%3D%22M0%205%20Q10%200%2020%205%20T40%205%20V10%20H0Z%22/%3E%3C/svg%3E') repeat-x 0 0 / 40px 10px; mask:url('data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20width%3D%2240%22%20height%3D%2210%22%20viewBox%3D%220%200%2040%2010%22%3E%3Cpath%20d%3D%22M0%205%20Q10%200%2020%205%20T40%205%20V10%20H0Z%22/%3E%3C/svg%3E') repeat-x 0 0 / 40px 10px; animation:waveSlide 1.6s linear infinite; }
+        @keyframes waveSlide{ to{ -webkit-mask-position:40px 0; mask-position:40px 0; } }
+        .mm-tank .tk{ position:absolute; left:0; right:0; z-index:2; border-top:2px dashed rgba(255,255,255,0.6); padding:1px 8px 0; text-align:right;
+                      font-family:'IBM Plex Mono',monospace; font-size:0.72em; font-weight:600; color:#fff; text-shadow:0 1px 2px rgba(0,0,0,0.7); }
+        .mm-rows{ gap:0; }
+        .mm-row{ flex:1; margin:2px 0; padding:0 12px; }
+        .mm-row .rg{ display:flex; flex-direction:column; align-items:flex-end; line-height:1.15; min-width:112px; }
+        .mm-row .rg b{ font-family:'IBM Plex Mono',monospace; font-weight:600; }
+        .mm-row .rg small{ font-size:0.74em; opacity:0.85; }
+        @media (prefers-reduced-motion:reduce){ .mm-tank .mm-fill::before{ animation:none; } }
     </style>
 </head>
 <body class="lang-en">
@@ -1096,6 +1241,35 @@ RESEARCHER_HTML = """<!DOCTYPE html>
         </div>
 
                 <div class="agency-split" id="agency-split">
+            <!-- MMDA: flood depth only. Rows listed top = deepest. -->
+            <section class="agency" id="mm-panel">
+                <div class="agency-head">
+                    <div><h2><em class="t-en">MMDA-Aligned Flood Gauge</em><em class="t-ph">Sukatan ng Baha (Naaayon sa MMDA)</em></h2><div class="src"><em class="t-en">Official standard flood level (depth in inches and feet) &middot; within one hour</em><em class="t-ph">Opisyal na pamantayang antas ng baha (lalim sa pulgada at talampakan) &middot; sa loob ng isang oras</em></div></div>
+                    <div class="live-chip"><div class="n" id="mm-in">--<small><em class="t-en">in</em><em class="t-ph">pulg</em></small></div><div class="ft" id="mm-ft">--</div><div class="t" id="mm-name"><em class="t-en">Gutter Level</em><em class="t-ph">Hanggang Gutter</em></div></div>
+                </div>
+                <div class="mm-wrap">
+                    <div class="mm-tank" id="mm-tank">
+                        <div class="mm-fill" id="mm-fill"></div>
+                        <span class="tk" style="top:calc(100% / 7 * 0)">45 <em class="t-en">in</em><em class="t-ph">pulg</em></span>
+                        <span class="tk" style="top:calc(100% / 7 * 1)">37 <em class="t-en">in</em><em class="t-ph">pulg</em></span>
+                        <span class="tk" style="top:calc(100% / 7 * 2)">26 <em class="t-en">in</em><em class="t-ph">pulg</em></span>
+                        <span class="tk" style="top:calc(100% / 7 * 3)">19 <em class="t-en">in</em><em class="t-ph">pulg</em></span>
+                        <span class="tk" style="top:calc(100% / 7 * 4)">13 <em class="t-en">in</em><em class="t-ph">pulg</em></span>
+                        <span class="tk" style="top:calc(100% / 7 * 5)">10 <em class="t-en">in</em><em class="t-ph">pulg</em></span>
+                        <span class="tk" style="top:calc(100% / 7 * 6)">8 <em class="t-en">in</em><em class="t-ph">pulg</em></span>
+                    </div>
+                    <div class="mm-rows" id="mm-rows">
+                        <div class="mm-row mm-npatv" data-i="6"><span class="nm"><em class="t-en">Chest Level</em><em class="t-ph">Hanggang Dibdib</em></span><span class="rg"><b>38-45 <em class="t-en">in</em><em class="t-ph">pulg</em></b><small>3′2″ - 3′9″</small></span><span class="tg">NPATV</span></div>
+                        <div class="mm-row mm-npatv" data-i="5"><span class="nm"><em class="t-en">Waist Level</em><em class="t-ph">Hanggang Baywang</em></span><span class="rg"><b>27-37 <em class="t-en">in</em><em class="t-ph">pulg</em></b><small>2′3″ - 3′1″</small></span><span class="tg">NPATV</span></div>
+                        <div class="mm-row mm-npatv" data-i="4"><span class="nm"><em class="t-en">Tires Level</em><em class="t-ph">Hanggang Gulong</em></span><span class="rg"><b>20-26 <em class="t-en">in</em><em class="t-ph">pulg</em></b><small>1′8″ - 2′2″</small></span><span class="tg">NPATV</span></div>
+                        <div class="mm-row mm-nplv" data-i="3"><span class="nm"><em class="t-en">Knee Level</em><em class="t-ph">Hanggang Tuhod</em></span><span class="rg"><b>14-19 <em class="t-en">in</em><em class="t-ph">pulg</em></b><small>1′2″ - 1′7″</small></span><span class="tg">NPLV</span></div>
+                        <div class="mm-row mm-nplv" data-i="2"><span class="nm"><em class="t-en">Half Tire Level</em><em class="t-ph">Hanggang Kalahating Gulong</em></span><span class="rg"><b>11-13 <em class="t-en">in</em><em class="t-ph">pulg</em></b><small>0′11″ - 1′1″</small></span><span class="tg">NPLV</span></div>
+                        <div class="mm-row mm-patv" data-i="1"><span class="nm"><em class="t-en">Half Knee Level</em><em class="t-ph">Hanggang Kalahating Tuhod</em></span><span class="rg"><b>9-10 <em class="t-en">in</em><em class="t-ph">pulg</em></b><small>0′9″ - 0′10″</small></span><span class="tg">PATV</span></div>
+                        <div class="mm-row mm-patv" data-i="0"><span class="nm"><em class="t-en">Gutter Level</em><em class="t-ph">Hanggang Gutter</em></span><span class="rg"><b>0-8 <em class="t-en">in</em><em class="t-ph">pulg</em></b><small>0′0″ - 0′8″</small></span><span class="tg">PATV</span></div>
+                    </div>
+                </div>
+                <div class="mm-legend"><em class="t-en"><b>PATV</b> Passable to All Types of Vehicles &middot; <b>NPLV</b> Not Passable to Light Vehicles &middot; <b>NPATV</b> Not Passable to All Types of Vehicles &middot; ′ = ft, ″ = in</em><em class="t-ph"><b>PATV</b> Madaanan ng Lahat ng Uri ng Sasakyan &middot; <b>NPLV</b> Hindi Madaanan ng Magagaang Sasakyan &middot; <b>NPATV</b> Hindi Madaanan ng Lahat ng Uri ng Sasakyan &middot; ′ = ft, ″ = pulg</em></div>
+            </section>
             <!-- PAGASA: rainfall rate only -->
             <section class="agency" id="pg-panel">
                 <div class="agency-head">
@@ -1119,26 +1293,6 @@ RESEARCHER_HTML = """<!DOCTYPE html>
                         <div class="rt"><em class="t-en">Heavy</em><em class="t-ph">Malakas</em></div><div class="rn"><em class="t-en">More than 30 mm within one hour</em><em class="t-ph">Higit sa 30 mm sa loob ng isang oras</em></div><div class="ds"><em class="t-en">Torrential rainfall. SEVERE flooding is EXPECTED. Community RESPONSE</em><em class="t-ph">Napakalakas na buhos ng ulan. INAASAHAN ang MATINDING pagbaha. Pagtugon ng Komunidad</em></div></div>
                     </div>
                 </div>
-            </section>
-            <!-- MMDA: flood depth only. Rows listed top = deepest. -->
-            <section class="agency" id="mm-panel">
-                <div class="agency-head">
-                    <div><h2><em class="t-en">MMDA-Aligned Flood Gauge</em><em class="t-ph">Sukatan ng Baha (Naaayon sa MMDA)</em></h2><div class="src"><em class="t-en">Official standard flood level (depth in inches) &middot; within one hour</em><em class="t-ph">Opisyal na pamantayang antas ng baha (lalim sa pulgada) &middot; sa loob ng isang oras</em></div></div>
-                    <div class="live-chip"><div class="n" id="mm-in">--<small><em class="t-en">in</em><em class="t-ph">pulg</em></small></div><div class="t" id="mm-name"><em class="t-en">Below gutter level</em><em class="t-ph">Mas mababa sa gutter</em></div></div>
-                </div>
-                <div class="mm-wrap">
-                    <div class="mm-rail"><div class="mm-fill" id="mm-fill"></div></div>
-                    <div class="mm-rows" id="mm-rows">
-                        <div class="mm-row mm-npatv" data-i="6"><span class="nm"><em class="t-en">Chest Level</em><em class="t-ph">Hanggang Dibdib</em></span><span class="in">45 <em class="t-en">in</em><em class="t-ph">pulg</em></span><span class="tg">NPATV</span></div>
-                        <div class="mm-row mm-npatv" data-i="5"><span class="nm"><em class="t-en">Waist Level</em><em class="t-ph">Hanggang Baywang</em></span><span class="in">37 <em class="t-en">in</em><em class="t-ph">pulg</em></span><span class="tg">NPATV</span></div>
-                        <div class="mm-row mm-npatv" data-i="4"><span class="nm"><em class="t-en">Tires Level</em><em class="t-ph">Hanggang Gulong</em></span><span class="in">26 <em class="t-en">in</em><em class="t-ph">pulg</em></span><span class="tg">NPATV</span></div>
-                        <div class="mm-row mm-nplv" data-i="3"><span class="nm"><em class="t-en">Knee Level</em><em class="t-ph">Hanggang Tuhod</em></span><span class="in">19 <em class="t-en">in</em><em class="t-ph">pulg</em></span><span class="tg">NPLV</span></div>
-                        <div class="mm-row mm-nplv" data-i="2"><span class="nm"><em class="t-en">Half Tire Level</em><em class="t-ph">Hanggang Kalahating Gulong</em></span><span class="in">13 <em class="t-en">in</em><em class="t-ph">pulg</em></span><span class="tg">NPLV</span></div>
-                        <div class="mm-row mm-patv" data-i="1"><span class="nm"><em class="t-en">Half Knee Level</em><em class="t-ph">Hanggang Kalahating Tuhod</em></span><span class="in">10 <em class="t-en">in</em><em class="t-ph">pulg</em></span><span class="tg">PATV</span></div>
-                        <div class="mm-row mm-patv" data-i="0"><span class="nm"><em class="t-en">Gutter Level</em><em class="t-ph">Hanggang Gutter</em></span><span class="in">8 <em class="t-en">in</em><em class="t-ph">pulg</em></span><span class="tg">PATV</span></div>
-                    </div>
-                </div>
-                <div class="mm-legend"><em class="t-en"><b>PATV</b> Passable to All Types of Vehicles &middot; <b>NPLV</b> Not Passable to Light Vehicles &middot; <b>NPATV</b> Not Passable to All Types of Vehicles</em><em class="t-ph"><b>PATV</b> Madaanan ng Lahat ng Uri ng Sasakyan &middot; <b>NPLV</b> Hindi Madaanan ng Magagaang Sasakyan &middot; <b>NPATV</b> Hindi Madaanan ng Lahat ng Uri ng Sasakyan</em></div>
             </section>
         </div>
 
@@ -2037,7 +2191,8 @@ RESEARCHER_HTML = """<!DOCTYPE html>
         }
 
         // ---- PAGASA rainfall warning + MMDA flood gauge (bilingual, tier-reactive) ----
-        const MMDA_IN = [8, 10, 13, 19, 26, 37, 45];
+        // MMDA bands use the upper bound of each level: 0-8 gutter, 9-10 half knee, 11-13 half tire, 14-19 knee, 20-26 tires, 27-37 waist, 38-45 chest.
+        const MMDA_HI = [8, 10, 13, 19, 26, 37, 45];
         const MMDA_NAME_EN = ['Gutter Level','Half Knee Level','Half Tire Level','Knee Level','Tires Level','Waist Level','Chest Level'];
         const MMDA_NAME_PH = ['Hanggang Gutter','Hanggang Kalahating Tuhod','Hanggang Kalahating Gulong','Hanggang Tuhod','Hanggang Gulong','Hanggang Baywang','Hanggang Dibdib'];
         const MMDA_LEVEL = ['green','green','orange','orange','red','red','red'];
@@ -2056,17 +2211,20 @@ RESEARCHER_HTML = """<!DOCTYPE html>
             setAlertClass(document.getElementById('pg-panel'), pg || 'none');
             document.getElementById('pg-rate').innerHTML = r.toFixed(1) + '<small>mm/hr</small>';
             document.getElementById('pg-status').innerHTML = pg === 'red' ? bi('Emergency','Emerhensiya') : (pg === 'orange' ? bi('Alert','Alerto') : (pg === 'yellow' ? bi('Advisory','Abiso') : bi('No warning','Walang babala')));
-            const inches = (Number(levelM) || 0) * 39.37;
-            let idx = -1;
-            MMDA_IN.forEach(function(t, i){ if (inches >= t) idx = i; });
+            const inches = Math.max(Number(levelM) || 0, 0) * 39.37;
+            let idx = MMDA_HI.findIndex(function(h){ return inches <= h; });
+            let frac = 1;
+            if (idx < 0){ idx = MMDA_HI.length - 1; }
+            else { const lo = idx ? MMDA_HI[idx - 1] : 0; frac = Math.min(Math.max((inches - lo) / (MMDA_HI[idx] - lo), 0), 1); }
             document.querySelectorAll('#mm-rows .mm-row').forEach(function(el){
                 el.classList.toggle('on', Number(el.dataset.i) === idx);
             });
-            setAlertClass(document.getElementById('mm-panel'), idx >= 0 ? MMDA_LEVEL[idx] : 'none');
+            setAlertClass(document.getElementById('mm-panel'), MMDA_LEVEL[idx]);
+            const ft = Math.floor(inches / 12);
             document.getElementById('mm-in').innerHTML = inches.toFixed(1) + '<small>' + bi('in','pulg') + '</small>';
-            document.getElementById('mm-name').innerHTML = idx >= 0 ? bi(MMDA_NAME_EN[idx], MMDA_NAME_PH[idx]) : bi('Below gutter level','Mas mababa sa gutter');
-            const fill = idx >= 0 ? ((idx + 1) / 7 * 100) : (Math.min(inches / 8, 1) * (100 / 14));
-            document.getElementById('mm-fill').style.height = fill + '%';
+            document.getElementById('mm-ft').innerHTML = ft + ' ft ' + (inches - ft * 12).toFixed(1) + ' ' + bi('in','pulg');
+            document.getElementById('mm-name').innerHTML = bi(MMDA_NAME_EN[idx], MMDA_NAME_PH[idx]);
+            document.getElementById('mm-fill').style.height = ((idx + frac) / MMDA_HI.length * 100) + '%';
         }
 
         // ---- Language toggle: flips body.lang-en <-> body.lang-ph; CSS does the rest ----
@@ -2561,6 +2719,27 @@ BARANGAY_HTML = """<!DOCTYPE html>
         .nb-chip{ font-family:inherit; color:inherit; cursor:pointer; }
         .nb-chip:hover{ background:rgba(255,255,255,0.42); }
         .nb-chip:focus-visible{ outline:3px solid currentColor; outline-offset:2px; }
+            /* ---------- GAUGE REVISION: water tank, ranges, ft+in, MMDA first ---------- */
+        @media (min-width:1001px){ .agency-split{ grid-template-columns:1.15fr 1fr; } }
+        .agency{ display:flex; flex-direction:column; }
+        .pg-list{ flex:1; justify-content:space-between; }
+        .pg-card{ flex:1; }
+        .live-chip .ft{ font-size:0.78em; font-weight:600; opacity:0.92; }
+        .mm-wrap{ flex:1; min-height:clamp(340px,46vh,480px); gap:12px; }
+        .mm-tank{ position:relative; width:clamp(92px,9vw,130px); flex-shrink:0; overflow:hidden; border-radius:14px; border:2px solid var(--line);
+                  background:linear-gradient(180deg,#0e2238,#12304d); }
+        .mm-tank .mm-fill{ background:linear-gradient(0deg, color-mix(in srgb, var(--ac, #3fb985) 72%, #000), var(--ac, #3fb985)); transition:height .9s cubic-bezier(.3,.8,.3,1), background .4s; z-index:1; }
+        .mm-tank .mm-fill::before{ content:''; position:absolute; left:0; right:0; top:-9px; height:10px; background:var(--ac, #3fb985);
+            -webkit-mask:url('data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20width%3D%2240%22%20height%3D%2210%22%20viewBox%3D%220%200%2040%2010%22%3E%3Cpath%20d%3D%22M0%205%20Q10%200%2020%205%20T40%205%20V10%20H0Z%22/%3E%3C/svg%3E') repeat-x 0 0 / 40px 10px; mask:url('data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20width%3D%2240%22%20height%3D%2210%22%20viewBox%3D%220%200%2040%2010%22%3E%3Cpath%20d%3D%22M0%205%20Q10%200%2020%205%20T40%205%20V10%20H0Z%22/%3E%3C/svg%3E') repeat-x 0 0 / 40px 10px; animation:waveSlide 1.6s linear infinite; }
+        @keyframes waveSlide{ to{ -webkit-mask-position:40px 0; mask-position:40px 0; } }
+        .mm-tank .tk{ position:absolute; left:0; right:0; z-index:2; border-top:2px dashed rgba(255,255,255,0.6); padding:1px 8px 0; text-align:right;
+                      font-family:'IBM Plex Mono',monospace; font-size:0.72em; font-weight:600; color:#fff; text-shadow:0 1px 2px rgba(0,0,0,0.7); }
+        .mm-rows{ gap:0; }
+        .mm-row{ flex:1; margin:2px 0; padding:0 12px; }
+        .mm-row .rg{ display:flex; flex-direction:column; align-items:flex-end; line-height:1.15; min-width:112px; }
+        .mm-row .rg b{ font-family:'IBM Plex Mono',monospace; font-weight:600; }
+        .mm-row .rg small{ font-size:0.74em; opacity:0.85; }
+        @media (prefers-reduced-motion:reduce){ .mm-tank .mm-fill::before{ animation:none; } }
     </style>
 </head>
 <body class="lang-en">
@@ -2638,6 +2817,35 @@ BARANGAY_HTML = """<!DOCTYPE html>
         </div>
 
                 <div class="agency-split" id="agency-split">
+            <!-- MMDA: flood depth only. Rows listed top = deepest. -->
+            <section class="agency" id="mm-panel">
+                <div class="agency-head">
+                    <div><h2><em class="t-en">MMDA-Aligned Flood Gauge</em><em class="t-ph">Sukatan ng Baha (Naaayon sa MMDA)</em></h2><div class="src"><em class="t-en">Official standard flood level (depth in inches and feet) &middot; within one hour</em><em class="t-ph">Opisyal na pamantayang antas ng baha (lalim sa pulgada at talampakan) &middot; sa loob ng isang oras</em></div></div>
+                    <div class="live-chip"><div class="n" id="mm-in">--<small><em class="t-en">in</em><em class="t-ph">pulg</em></small></div><div class="ft" id="mm-ft">--</div><div class="t" id="mm-name"><em class="t-en">Gutter Level</em><em class="t-ph">Hanggang Gutter</em></div></div>
+                </div>
+                <div class="mm-wrap">
+                    <div class="mm-tank" id="mm-tank">
+                        <div class="mm-fill" id="mm-fill"></div>
+                        <span class="tk" style="top:calc(100% / 7 * 0)">45 <em class="t-en">in</em><em class="t-ph">pulg</em></span>
+                        <span class="tk" style="top:calc(100% / 7 * 1)">37 <em class="t-en">in</em><em class="t-ph">pulg</em></span>
+                        <span class="tk" style="top:calc(100% / 7 * 2)">26 <em class="t-en">in</em><em class="t-ph">pulg</em></span>
+                        <span class="tk" style="top:calc(100% / 7 * 3)">19 <em class="t-en">in</em><em class="t-ph">pulg</em></span>
+                        <span class="tk" style="top:calc(100% / 7 * 4)">13 <em class="t-en">in</em><em class="t-ph">pulg</em></span>
+                        <span class="tk" style="top:calc(100% / 7 * 5)">10 <em class="t-en">in</em><em class="t-ph">pulg</em></span>
+                        <span class="tk" style="top:calc(100% / 7 * 6)">8 <em class="t-en">in</em><em class="t-ph">pulg</em></span>
+                    </div>
+                    <div class="mm-rows" id="mm-rows">
+                        <div class="mm-row mm-npatv" data-i="6"><span class="nm"><em class="t-en">Chest Level</em><em class="t-ph">Hanggang Dibdib</em></span><span class="rg"><b>38-45 <em class="t-en">in</em><em class="t-ph">pulg</em></b><small>3′2″ - 3′9″</small></span><span class="tg">NPATV</span></div>
+                        <div class="mm-row mm-npatv" data-i="5"><span class="nm"><em class="t-en">Waist Level</em><em class="t-ph">Hanggang Baywang</em></span><span class="rg"><b>27-37 <em class="t-en">in</em><em class="t-ph">pulg</em></b><small>2′3″ - 3′1″</small></span><span class="tg">NPATV</span></div>
+                        <div class="mm-row mm-npatv" data-i="4"><span class="nm"><em class="t-en">Tires Level</em><em class="t-ph">Hanggang Gulong</em></span><span class="rg"><b>20-26 <em class="t-en">in</em><em class="t-ph">pulg</em></b><small>1′8″ - 2′2″</small></span><span class="tg">NPATV</span></div>
+                        <div class="mm-row mm-nplv" data-i="3"><span class="nm"><em class="t-en">Knee Level</em><em class="t-ph">Hanggang Tuhod</em></span><span class="rg"><b>14-19 <em class="t-en">in</em><em class="t-ph">pulg</em></b><small>1′2″ - 1′7″</small></span><span class="tg">NPLV</span></div>
+                        <div class="mm-row mm-nplv" data-i="2"><span class="nm"><em class="t-en">Half Tire Level</em><em class="t-ph">Hanggang Kalahating Gulong</em></span><span class="rg"><b>11-13 <em class="t-en">in</em><em class="t-ph">pulg</em></b><small>0′11″ - 1′1″</small></span><span class="tg">NPLV</span></div>
+                        <div class="mm-row mm-patv" data-i="1"><span class="nm"><em class="t-en">Half Knee Level</em><em class="t-ph">Hanggang Kalahating Tuhod</em></span><span class="rg"><b>9-10 <em class="t-en">in</em><em class="t-ph">pulg</em></b><small>0′9″ - 0′10″</small></span><span class="tg">PATV</span></div>
+                        <div class="mm-row mm-patv" data-i="0"><span class="nm"><em class="t-en">Gutter Level</em><em class="t-ph">Hanggang Gutter</em></span><span class="rg"><b>0-8 <em class="t-en">in</em><em class="t-ph">pulg</em></b><small>0′0″ - 0′8″</small></span><span class="tg">PATV</span></div>
+                    </div>
+                </div>
+                <div class="mm-legend"><em class="t-en"><b>PATV</b> Passable to All Types of Vehicles &middot; <b>NPLV</b> Not Passable to Light Vehicles &middot; <b>NPATV</b> Not Passable to All Types of Vehicles &middot; ′ = ft, ″ = in</em><em class="t-ph"><b>PATV</b> Madaanan ng Lahat ng Uri ng Sasakyan &middot; <b>NPLV</b> Hindi Madaanan ng Magagaang Sasakyan &middot; <b>NPATV</b> Hindi Madaanan ng Lahat ng Uri ng Sasakyan &middot; ′ = ft, ″ = pulg</em></div>
+            </section>
             <!-- PAGASA: rainfall rate only -->
             <section class="agency" id="pg-panel">
                 <div class="agency-head">
@@ -2661,26 +2869,6 @@ BARANGAY_HTML = """<!DOCTYPE html>
                         <div class="rt"><em class="t-en">Heavy</em><em class="t-ph">Malakas</em></div><div class="rn"><em class="t-en">More than 30 mm within one hour</em><em class="t-ph">Higit sa 30 mm sa loob ng isang oras</em></div><div class="ds"><em class="t-en">Torrential rainfall. SEVERE flooding is EXPECTED. Community RESPONSE</em><em class="t-ph">Napakalakas na buhos ng ulan. INAASAHAN ang MATINDING pagbaha. Pagtugon ng Komunidad</em></div></div>
                     </div>
                 </div>
-            </section>
-            <!-- MMDA: flood depth only. Rows listed top = deepest. -->
-            <section class="agency" id="mm-panel">
-                <div class="agency-head">
-                    <div><h2><em class="t-en">MMDA-Aligned Flood Gauge</em><em class="t-ph">Sukatan ng Baha (Naaayon sa MMDA)</em></h2><div class="src"><em class="t-en">Official standard flood level (depth in inches) &middot; within one hour</em><em class="t-ph">Opisyal na pamantayang antas ng baha (lalim sa pulgada) &middot; sa loob ng isang oras</em></div></div>
-                    <div class="live-chip"><div class="n" id="mm-in">--<small><em class="t-en">in</em><em class="t-ph">pulg</em></small></div><div class="t" id="mm-name"><em class="t-en">Below gutter level</em><em class="t-ph">Mas mababa sa gutter</em></div></div>
-                </div>
-                <div class="mm-wrap">
-                    <div class="mm-rail"><div class="mm-fill" id="mm-fill"></div></div>
-                    <div class="mm-rows" id="mm-rows">
-                        <div class="mm-row mm-npatv" data-i="6"><span class="nm"><em class="t-en">Chest Level</em><em class="t-ph">Hanggang Dibdib</em></span><span class="in">45 <em class="t-en">in</em><em class="t-ph">pulg</em></span><span class="tg">NPATV</span></div>
-                        <div class="mm-row mm-npatv" data-i="5"><span class="nm"><em class="t-en">Waist Level</em><em class="t-ph">Hanggang Baywang</em></span><span class="in">37 <em class="t-en">in</em><em class="t-ph">pulg</em></span><span class="tg">NPATV</span></div>
-                        <div class="mm-row mm-npatv" data-i="4"><span class="nm"><em class="t-en">Tires Level</em><em class="t-ph">Hanggang Gulong</em></span><span class="in">26 <em class="t-en">in</em><em class="t-ph">pulg</em></span><span class="tg">NPATV</span></div>
-                        <div class="mm-row mm-nplv" data-i="3"><span class="nm"><em class="t-en">Knee Level</em><em class="t-ph">Hanggang Tuhod</em></span><span class="in">19 <em class="t-en">in</em><em class="t-ph">pulg</em></span><span class="tg">NPLV</span></div>
-                        <div class="mm-row mm-nplv" data-i="2"><span class="nm"><em class="t-en">Half Tire Level</em><em class="t-ph">Hanggang Kalahating Gulong</em></span><span class="in">13 <em class="t-en">in</em><em class="t-ph">pulg</em></span><span class="tg">NPLV</span></div>
-                        <div class="mm-row mm-patv" data-i="1"><span class="nm"><em class="t-en">Half Knee Level</em><em class="t-ph">Hanggang Kalahating Tuhod</em></span><span class="in">10 <em class="t-en">in</em><em class="t-ph">pulg</em></span><span class="tg">PATV</span></div>
-                        <div class="mm-row mm-patv" data-i="0"><span class="nm"><em class="t-en">Gutter Level</em><em class="t-ph">Hanggang Gutter</em></span><span class="in">8 <em class="t-en">in</em><em class="t-ph">pulg</em></span><span class="tg">PATV</span></div>
-                    </div>
-                </div>
-                <div class="mm-legend"><em class="t-en"><b>PATV</b> Passable to All Types of Vehicles &middot; <b>NPLV</b> Not Passable to Light Vehicles &middot; <b>NPATV</b> Not Passable to All Types of Vehicles</em><em class="t-ph"><b>PATV</b> Madaanan ng Lahat ng Uri ng Sasakyan &middot; <b>NPLV</b> Hindi Madaanan ng Magagaang Sasakyan &middot; <b>NPATV</b> Hindi Madaanan ng Lahat ng Uri ng Sasakyan</em></div>
             </section>
         </div>
 
@@ -3448,7 +3636,8 @@ BARANGAY_HTML = """<!DOCTYPE html>
         }
 
         // ---- PAGASA rainfall warning + MMDA flood gauge (bilingual, tier-reactive) ----
-        const MMDA_IN = [8, 10, 13, 19, 26, 37, 45];
+        // MMDA bands use the upper bound of each level: 0-8 gutter, 9-10 half knee, 11-13 half tire, 14-19 knee, 20-26 tires, 27-37 waist, 38-45 chest.
+        const MMDA_HI = [8, 10, 13, 19, 26, 37, 45];
         const MMDA_NAME_EN = ['Gutter Level','Half Knee Level','Half Tire Level','Knee Level','Tires Level','Waist Level','Chest Level'];
         const MMDA_NAME_PH = ['Hanggang Gutter','Hanggang Kalahating Tuhod','Hanggang Kalahating Gulong','Hanggang Tuhod','Hanggang Gulong','Hanggang Baywang','Hanggang Dibdib'];
         const MMDA_LEVEL = ['green','green','orange','orange','red','red','red'];
@@ -3467,17 +3656,20 @@ BARANGAY_HTML = """<!DOCTYPE html>
             setAlertClass(document.getElementById('pg-panel'), pg || 'none');
             document.getElementById('pg-rate').innerHTML = r.toFixed(1) + '<small>mm/hr</small>';
             document.getElementById('pg-status').innerHTML = pg === 'red' ? bi('Emergency','Emerhensiya') : (pg === 'orange' ? bi('Alert','Alerto') : (pg === 'yellow' ? bi('Advisory','Abiso') : bi('No warning','Walang babala')));
-            const inches = (Number(levelM) || 0) * 39.37;
-            let idx = -1;
-            MMDA_IN.forEach(function(t, i){ if (inches >= t) idx = i; });
+            const inches = Math.max(Number(levelM) || 0, 0) * 39.37;
+            let idx = MMDA_HI.findIndex(function(h){ return inches <= h; });
+            let frac = 1;
+            if (idx < 0){ idx = MMDA_HI.length - 1; }
+            else { const lo = idx ? MMDA_HI[idx - 1] : 0; frac = Math.min(Math.max((inches - lo) / (MMDA_HI[idx] - lo), 0), 1); }
             document.querySelectorAll('#mm-rows .mm-row').forEach(function(el){
                 el.classList.toggle('on', Number(el.dataset.i) === idx);
             });
-            setAlertClass(document.getElementById('mm-panel'), idx >= 0 ? MMDA_LEVEL[idx] : 'none');
+            setAlertClass(document.getElementById('mm-panel'), MMDA_LEVEL[idx]);
+            const ft = Math.floor(inches / 12);
             document.getElementById('mm-in').innerHTML = inches.toFixed(1) + '<small>' + bi('in','pulg') + '</small>';
-            document.getElementById('mm-name').innerHTML = idx >= 0 ? bi(MMDA_NAME_EN[idx], MMDA_NAME_PH[idx]) : bi('Below gutter level','Mas mababa sa gutter');
-            const fill = idx >= 0 ? ((idx + 1) / 7 * 100) : (Math.min(inches / 8, 1) * (100 / 14));
-            document.getElementById('mm-fill').style.height = fill + '%';
+            document.getElementById('mm-ft').innerHTML = ft + ' ft ' + (inches - ft * 12).toFixed(1) + ' ' + bi('in','pulg');
+            document.getElementById('mm-name').innerHTML = bi(MMDA_NAME_EN[idx], MMDA_NAME_PH[idx]);
+            document.getElementById('mm-fill').style.height = ((idx + frac) / MMDA_HI.length * 100) + '%';
         }
 
         // ---- Language toggle: flips body.lang-en <-> body.lang-ph; CSS does the rest ----
@@ -4380,6 +4572,10 @@ def build_api_payload():
         "reports_pending": sum(1 for r in resident_reports if r["status"] == "Pending"),
     }
 
+init_db()
+load_persisted_state()
+start_background_logger()
+
 @app.route('/')
 def root():
     if "username" not in session:
@@ -4399,7 +4595,9 @@ def login():
             session['username'] = username
             session['role'] = account["role"]
             session['display_name'] = account["display_name"]
-            next_url = request.args.get('next')
+            next_url = request.args.get('next') or ''
+            if not next_url.startswith('/') or next_url.startswith('//') or '\\' in next_url:
+                next_url = None
             if account["role"] == "researcher":
                 return redirect(next_url or url_for('researcher_dashboard'))
             return redirect(next_url or url_for('barangay_dashboard'))
@@ -4581,14 +4779,23 @@ def upload_report():
         node = request.form.get('node', '')
         report_type = request.form.get('report_type', 'baha')
         comment = request.form.get('comment', '').strip()
-        if file.filename != '':
+        if file.filename != '' and (file.mimetype or '').startswith('image/'):
             image_b64 = base64.b64encode(file.read()).decode('utf-8')
-            report_id = len(resident_reports) + 1
+            node, report_type, comment = node[:40], report_type[:20], comment[:500]
+            time_label = datetime.now().strftime("%H:%M:%S")
+            report_id = db_run("INSERT INTO reports (created, time_label, node, report_type, comment, image_b64, status) "
+                               "VALUES (?,?,?,?,?,?, 'Pending')",
+                               (datetime.now().isoformat(sep=" ", timespec="seconds"), time_label, node,
+                                report_type, comment, image_b64))
+            if not report_id:
+                report_id = (resident_reports[-1]["id"] + 1) if resident_reports else 1
             resident_reports.append({
                 "id": report_id, "image_data": image_b64, "node": node,
                 "report_type": report_type, "comment": comment,
-                "time": datetime.now().strftime("%H:%M:%S"), "status": "Pending"
+                "time": time_label, "status": "Pending"
             })
+            while len(resident_reports) > MAX_REPORTS_IN_MEMORY:
+                resident_reports.pop(0)
     return redirect(url_for('resident_portal'))
 
 @app.route('/api/report/<int:report_id>')
@@ -4608,6 +4815,15 @@ def api_report_detail(report_id):
                 "time": r['time'],
                 "image_data": r['image_data'],
             })
+    rows = db_run("SELECT * FROM reports WHERE id = ?", (report_id,), fetch=True)
+    if rows:
+        r = db_report_row_to_dict(rows[0])
+        return jsonify({
+            "id": r['id'], "node": r['node'],
+            "node_label": NODE_META.get(r['node'], {}).get('label', 'Unspecified area'),
+            "report_type": r['report_type'], "comment": r['comment'],
+            "time": r['time'], "image_data": r['image_data'],
+        })
     return jsonify({"error": "not found"}), 404
 
 @app.route('/verify/<int:report_id>')
@@ -4616,6 +4832,7 @@ def verify_report(report_id):
     for r in resident_reports:
         if r['id'] == report_id:
             r['status'] = "Verified"
+    db_run("UPDATE reports SET status = ? WHERE id = ?", ("Verified", report_id))
     return redirect(url_for('researcher_dashboard' if session.get('role') == 'researcher' else 'barangay_dashboard'))
 
 @app.route('/reject/<int:report_id>')
@@ -4624,6 +4841,7 @@ def reject_report(report_id):
     for r in resident_reports:
         if r['id'] == report_id:
             r['status'] = "Flagged"
+    db_run("UPDATE reports SET status = ? WHERE id = ?", ("Flagged", report_id))
     return redirect(url_for('researcher_dashboard' if session.get('role') == 'researcher' else 'barangay_dashboard'))
 
 # ------------------------------------------------------------------------------
@@ -4658,6 +4876,7 @@ def request_snapshot(node_id):
         return jsonify({"ok": False, "error": "no camera on this node"}), 400
     node_snapshots[node_id]["last_captured"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     node_snapshots[node_id]["requested_count"] += 1
+    db_set("node_snapshots", node_snapshots)
     log_event("INFO", "Snapshot requested from " + HARDWARE[NODE_META[node_id]["device"]]["label"])
     return jsonify({"ok": True, "node_id": node_id, "snapshot": node_snapshots[node_id]})
 
@@ -4674,6 +4893,7 @@ def update_node_config(node_id):
     if "lng" in payload:
         NODE_META[node_id]["lng"] = float(payload["lng"])
     ALL_META[node_id] = NODE_META[node_id]
+    db_set("node_config", {n: {k: NODE_META[n][k] for k in ("label", "lat", "lng")} for n in NODE_META})
     return jsonify({"ok": True, "node": NODE_META[node_id]})
 
 @app.route('/api/config/thresholds', methods=['POST'])
@@ -4691,6 +4911,7 @@ def update_thresholds():
     TIER_THRESHOLDS["yellow"] = yellow
     TIER_THRESHOLDS["orange"] = orange
     TIER_THRESHOLDS["red"] = red
+    db_set("thresholds", TIER_THRESHOLDS)
     return jsonify({"ok": True, "thresholds": TIER_THRESHOLDS})
 
 @app.route('/api/export.csv')
