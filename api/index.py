@@ -1161,6 +1161,25 @@ RESEARCHER_HTML = """<!DOCTYPE html>
         .mm-row .rg b{ font-family:'IBM Plex Mono',monospace; font-weight:600; }
         .mm-row .rg small{ font-size:0.74em; opacity:0.85; }
         @media (prefers-reduced-motion:reduce){ .mm-tank .mm-fill::before{ animation:none; } }
+            /* ---------- BIG WATER TANK (inches, MMDA standard) + feet-first side list ---------- */
+        @media (min-width:1001px){ .agency-split{ grid-template-columns:1.4fr 1fr; } }
+        .mm-wrap{ min-height:clamp(440px,60vh,660px); gap:16px; }
+        .mm-tank{ flex:0 0 46%; width:auto; border-radius:18px; }
+        .mm-tank .mm-fill::before{ top:-14px; height:16px; -webkit-mask-size:64px 16px; mask-size:64px 16px; animation-name:waveSlide2; }
+        @keyframes waveSlide2{ to{ -webkit-mask-position:64px 0; mask-position:64px 0; } }
+        .mm-tank .tk{ font-size:clamp(0.85em,1.1vw,1.15em); padding:2px 10px 0; }
+        .mm-big{ position:absolute; left:0; right:0; top:50%; transform:translateY(-50%); z-index:3; text-align:center; pointer-events:none;
+                 font-family:'IBM Plex Mono',monospace; font-weight:700; font-size:clamp(1.5em,2.4vw,2.4em); line-height:1; color:#fff;
+                 text-shadow:0 2px 10px rgba(0,0,0,0.7); }
+        .mm-big small{ font-size:0.42em; margin-left:5px; opacity:0.9; }
+        .mm-row{ cursor:default; outline:none; }
+        .mm-row .nm{ font-size:clamp(1em,1.4vw,1.3em); }
+        .mm-row .rg b{ font-size:clamp(1.05em,1.5vw,1.45em); }
+        .mm-row .rg small{ display:none; }
+        .mm-row:hover .rg small, .mm-row:focus .rg small, .mm-row.on .rg small{ display:block; }
+        .mm-row:hover, .mm-row:focus{ opacity:1; border-color:var(--tc); }
+        .mm-big{ top:auto; transform:none; bottom:min(calc(var(--fill, 0%) + 12px), calc(100% - 2.6em)); transition:bottom .9s cubic-bezier(.3,.8,.3,1); }
+        @media (prefers-reduced-motion:reduce){ .mm-tank .mm-fill::before{ animation:none; } }
     </style>
 </head>
 <body class="lang-en">
@@ -1250,6 +1269,7 @@ RESEARCHER_HTML = """<!DOCTYPE html>
                 <div class="mm-wrap">
                     <div class="mm-tank" id="mm-tank">
                         <div class="mm-fill" id="mm-fill"></div>
+                        <div class="mm-big" id="mm-big">--</div>
                         <span class="tk" style="top:calc(100% / 7 * 0)">45 <em class="t-en">in</em><em class="t-ph">pulg</em></span>
                         <span class="tk" style="top:calc(100% / 7 * 1)">37 <em class="t-en">in</em><em class="t-ph">pulg</em></span>
                         <span class="tk" style="top:calc(100% / 7 * 2)">26 <em class="t-en">in</em><em class="t-ph">pulg</em></span>
@@ -1259,16 +1279,16 @@ RESEARCHER_HTML = """<!DOCTYPE html>
                         <span class="tk" style="top:calc(100% / 7 * 6)">8 <em class="t-en">in</em><em class="t-ph">pulg</em></span>
                     </div>
                     <div class="mm-rows" id="mm-rows">
-                        <div class="mm-row mm-npatv" data-i="6"><span class="nm"><em class="t-en">Chest Level</em><em class="t-ph">Hanggang Dibdib</em></span><span class="rg"><b>38-45 <em class="t-en">in</em><em class="t-ph">pulg</em></b><small>3′2″ - 3′9″</small></span><span class="tg">NPATV</span></div>
-                        <div class="mm-row mm-npatv" data-i="5"><span class="nm"><em class="t-en">Waist Level</em><em class="t-ph">Hanggang Baywang</em></span><span class="rg"><b>27-37 <em class="t-en">in</em><em class="t-ph">pulg</em></b><small>2′3″ - 3′1″</small></span><span class="tg">NPATV</span></div>
-                        <div class="mm-row mm-npatv" data-i="4"><span class="nm"><em class="t-en">Tires Level</em><em class="t-ph">Hanggang Gulong</em></span><span class="rg"><b>20-26 <em class="t-en">in</em><em class="t-ph">pulg</em></b><small>1′8″ - 2′2″</small></span><span class="tg">NPATV</span></div>
-                        <div class="mm-row mm-nplv" data-i="3"><span class="nm"><em class="t-en">Knee Level</em><em class="t-ph">Hanggang Tuhod</em></span><span class="rg"><b>14-19 <em class="t-en">in</em><em class="t-ph">pulg</em></b><small>1′2″ - 1′7″</small></span><span class="tg">NPLV</span></div>
-                        <div class="mm-row mm-nplv" data-i="2"><span class="nm"><em class="t-en">Half Tire Level</em><em class="t-ph">Hanggang Kalahating Gulong</em></span><span class="rg"><b>11-13 <em class="t-en">in</em><em class="t-ph">pulg</em></b><small>0′11″ - 1′1″</small></span><span class="tg">NPLV</span></div>
-                        <div class="mm-row mm-patv" data-i="1"><span class="nm"><em class="t-en">Half Knee Level</em><em class="t-ph">Hanggang Kalahating Tuhod</em></span><span class="rg"><b>9-10 <em class="t-en">in</em><em class="t-ph">pulg</em></b><small>0′9″ - 0′10″</small></span><span class="tg">PATV</span></div>
-                        <div class="mm-row mm-patv" data-i="0"><span class="nm"><em class="t-en">Gutter Level</em><em class="t-ph">Hanggang Gutter</em></span><span class="rg"><b>0-8 <em class="t-en">in</em><em class="t-ph">pulg</em></b><small>0′0″ - 0′8″</small></span><span class="tg">PATV</span></div>
+                        <div tabindex="0" class="mm-row mm-npatv" data-i="6"><span class="nm"><em class="t-en">Chest Level</em><em class="t-ph">Hanggang Dibdib</em></span><span class="rg"><b>3.2-3.8 ft</b><small>38-45 <em class="t-en">in</em><em class="t-ph">pulg</em></small></span><span class="tg">NPATV</span></div>
+                        <div tabindex="0" class="mm-row mm-npatv" data-i="5"><span class="nm"><em class="t-en">Waist Level</em><em class="t-ph">Hanggang Baywang</em></span><span class="rg"><b>2.3-3.1 ft</b><small>27-37 <em class="t-en">in</em><em class="t-ph">pulg</em></small></span><span class="tg">NPATV</span></div>
+                        <div tabindex="0" class="mm-row mm-npatv" data-i="4"><span class="nm"><em class="t-en">Tires Level</em><em class="t-ph">Hanggang Gulong</em></span><span class="rg"><b>1.7-2.2 ft</b><small>20-26 <em class="t-en">in</em><em class="t-ph">pulg</em></small></span><span class="tg">NPATV</span></div>
+                        <div tabindex="0" class="mm-row mm-nplv" data-i="3"><span class="nm"><em class="t-en">Knee Level</em><em class="t-ph">Hanggang Tuhod</em></span><span class="rg"><b>1.2-1.6 ft</b><small>14-19 <em class="t-en">in</em><em class="t-ph">pulg</em></small></span><span class="tg">NPLV</span></div>
+                        <div tabindex="0" class="mm-row mm-nplv" data-i="2"><span class="nm"><em class="t-en">Half Tire Level</em><em class="t-ph">Hanggang Kalahating Gulong</em></span><span class="rg"><b>0.9-1.1 ft</b><small>11-13 <em class="t-en">in</em><em class="t-ph">pulg</em></small></span><span class="tg">NPLV</span></div>
+                        <div tabindex="0" class="mm-row mm-patv" data-i="1"><span class="nm"><em class="t-en">Half Knee Level</em><em class="t-ph">Hanggang Kalahating Tuhod</em></span><span class="rg"><b>0.8 ft</b><small>9-10 <em class="t-en">in</em><em class="t-ph">pulg</em></small></span><span class="tg">PATV</span></div>
+                        <div tabindex="0" class="mm-row mm-patv" data-i="0"><span class="nm"><em class="t-en">Gutter Level</em><em class="t-ph">Hanggang Gutter</em></span><span class="rg"><b>0-0.7 ft</b><small>0-8 <em class="t-en">in</em><em class="t-ph">pulg</em></small></span><span class="tg">PATV</span></div>
                     </div>
                 </div>
-                <div class="mm-legend"><em class="t-en"><b>PATV</b> Passable to All Types of Vehicles &middot; <b>NPLV</b> Not Passable to Light Vehicles &middot; <b>NPATV</b> Not Passable to All Types of Vehicles &middot; ′ = ft, ″ = in</em><em class="t-ph"><b>PATV</b> Madaanan ng Lahat ng Uri ng Sasakyan &middot; <b>NPLV</b> Hindi Madaanan ng Magagaang Sasakyan &middot; <b>NPATV</b> Hindi Madaanan ng Lahat ng Uri ng Sasakyan &middot; ′ = ft, ″ = pulg</em></div>
+                <div class="mm-legend"><em class="t-en"><b>PATV</b> Passable to All Types of Vehicles &middot; <b>NPLV</b> Not Passable to Light Vehicles &middot; <b>NPATV</b> Not Passable to All Types of Vehicles &middot; Rows show feet. Hover or tap a row for inches.</em><em class="t-ph"><b>PATV</b> Madaanan ng Lahat ng Uri ng Sasakyan &middot; <b>NPLV</b> Hindi Madaanan ng Magagaang Sasakyan &middot; <b>NPATV</b> Hindi Madaanan ng Lahat ng Uri ng Sasakyan &middot; Talampakan ang ipinapakita. I-hover o i-tap ang hanay para sa pulgada.</em></div>
             </section>
             <!-- PAGASA: rainfall rate only -->
             <section class="agency" id="pg-panel">
@@ -2224,7 +2244,10 @@ RESEARCHER_HTML = """<!DOCTYPE html>
             document.getElementById('mm-in').innerHTML = inches.toFixed(1) + '<small>' + bi('in','pulg') + '</small>';
             document.getElementById('mm-ft').innerHTML = ft + ' ft ' + (inches - ft * 12).toFixed(1) + ' ' + bi('in','pulg');
             document.getElementById('mm-name').innerHTML = bi(MMDA_NAME_EN[idx], MMDA_NAME_PH[idx]);
-            document.getElementById('mm-fill').style.height = ((idx + frac) / MMDA_HI.length * 100) + '%';
+            document.getElementById('mm-big').innerHTML = inches.toFixed(1) + '<small>' + bi('in','pulg') + '</small>';
+            const fillPct = ((idx + frac) / MMDA_HI.length * 100) + '%';
+            document.getElementById('mm-fill').style.height = fillPct;
+            document.getElementById('mm-tank').style.setProperty('--fill', fillPct);
         }
 
         // ---- Language toggle: flips body.lang-en <-> body.lang-ph; CSS does the rest ----
@@ -2740,6 +2763,25 @@ BARANGAY_HTML = """<!DOCTYPE html>
         .mm-row .rg b{ font-family:'IBM Plex Mono',monospace; font-weight:600; }
         .mm-row .rg small{ font-size:0.74em; opacity:0.85; }
         @media (prefers-reduced-motion:reduce){ .mm-tank .mm-fill::before{ animation:none; } }
+            /* ---------- BIG WATER TANK (inches, MMDA standard) + feet-first side list ---------- */
+        @media (min-width:1001px){ .agency-split{ grid-template-columns:1.4fr 1fr; } }
+        .mm-wrap{ min-height:clamp(440px,60vh,660px); gap:16px; }
+        .mm-tank{ flex:0 0 46%; width:auto; border-radius:18px; }
+        .mm-tank .mm-fill::before{ top:-14px; height:16px; -webkit-mask-size:64px 16px; mask-size:64px 16px; animation-name:waveSlide2; }
+        @keyframes waveSlide2{ to{ -webkit-mask-position:64px 0; mask-position:64px 0; } }
+        .mm-tank .tk{ font-size:clamp(0.85em,1.1vw,1.15em); padding:2px 10px 0; }
+        .mm-big{ position:absolute; left:0; right:0; top:50%; transform:translateY(-50%); z-index:3; text-align:center; pointer-events:none;
+                 font-family:'IBM Plex Mono',monospace; font-weight:700; font-size:clamp(1.5em,2.4vw,2.4em); line-height:1; color:#fff;
+                 text-shadow:0 2px 10px rgba(0,0,0,0.7); }
+        .mm-big small{ font-size:0.42em; margin-left:5px; opacity:0.9; }
+        .mm-row{ cursor:default; outline:none; }
+        .mm-row .nm{ font-size:clamp(1em,1.4vw,1.3em); }
+        .mm-row .rg b{ font-size:clamp(1.05em,1.5vw,1.45em); }
+        .mm-row .rg small{ display:none; }
+        .mm-row:hover .rg small, .mm-row:focus .rg small, .mm-row.on .rg small{ display:block; }
+        .mm-row:hover, .mm-row:focus{ opacity:1; border-color:var(--tc); }
+        .mm-big{ top:auto; transform:none; bottom:min(calc(var(--fill, 0%) + 12px), calc(100% - 2.6em)); transition:bottom .9s cubic-bezier(.3,.8,.3,1); }
+        @media (prefers-reduced-motion:reduce){ .mm-tank .mm-fill::before{ animation:none; } }
     </style>
 </head>
 <body class="lang-en">
@@ -2826,6 +2868,7 @@ BARANGAY_HTML = """<!DOCTYPE html>
                 <div class="mm-wrap">
                     <div class="mm-tank" id="mm-tank">
                         <div class="mm-fill" id="mm-fill"></div>
+                        <div class="mm-big" id="mm-big">--</div>
                         <span class="tk" style="top:calc(100% / 7 * 0)">45 <em class="t-en">in</em><em class="t-ph">pulg</em></span>
                         <span class="tk" style="top:calc(100% / 7 * 1)">37 <em class="t-en">in</em><em class="t-ph">pulg</em></span>
                         <span class="tk" style="top:calc(100% / 7 * 2)">26 <em class="t-en">in</em><em class="t-ph">pulg</em></span>
@@ -2835,16 +2878,16 @@ BARANGAY_HTML = """<!DOCTYPE html>
                         <span class="tk" style="top:calc(100% / 7 * 6)">8 <em class="t-en">in</em><em class="t-ph">pulg</em></span>
                     </div>
                     <div class="mm-rows" id="mm-rows">
-                        <div class="mm-row mm-npatv" data-i="6"><span class="nm"><em class="t-en">Chest Level</em><em class="t-ph">Hanggang Dibdib</em></span><span class="rg"><b>38-45 <em class="t-en">in</em><em class="t-ph">pulg</em></b><small>3′2″ - 3′9″</small></span><span class="tg">NPATV</span></div>
-                        <div class="mm-row mm-npatv" data-i="5"><span class="nm"><em class="t-en">Waist Level</em><em class="t-ph">Hanggang Baywang</em></span><span class="rg"><b>27-37 <em class="t-en">in</em><em class="t-ph">pulg</em></b><small>2′3″ - 3′1″</small></span><span class="tg">NPATV</span></div>
-                        <div class="mm-row mm-npatv" data-i="4"><span class="nm"><em class="t-en">Tires Level</em><em class="t-ph">Hanggang Gulong</em></span><span class="rg"><b>20-26 <em class="t-en">in</em><em class="t-ph">pulg</em></b><small>1′8″ - 2′2″</small></span><span class="tg">NPATV</span></div>
-                        <div class="mm-row mm-nplv" data-i="3"><span class="nm"><em class="t-en">Knee Level</em><em class="t-ph">Hanggang Tuhod</em></span><span class="rg"><b>14-19 <em class="t-en">in</em><em class="t-ph">pulg</em></b><small>1′2″ - 1′7″</small></span><span class="tg">NPLV</span></div>
-                        <div class="mm-row mm-nplv" data-i="2"><span class="nm"><em class="t-en">Half Tire Level</em><em class="t-ph">Hanggang Kalahating Gulong</em></span><span class="rg"><b>11-13 <em class="t-en">in</em><em class="t-ph">pulg</em></b><small>0′11″ - 1′1″</small></span><span class="tg">NPLV</span></div>
-                        <div class="mm-row mm-patv" data-i="1"><span class="nm"><em class="t-en">Half Knee Level</em><em class="t-ph">Hanggang Kalahating Tuhod</em></span><span class="rg"><b>9-10 <em class="t-en">in</em><em class="t-ph">pulg</em></b><small>0′9″ - 0′10″</small></span><span class="tg">PATV</span></div>
-                        <div class="mm-row mm-patv" data-i="0"><span class="nm"><em class="t-en">Gutter Level</em><em class="t-ph">Hanggang Gutter</em></span><span class="rg"><b>0-8 <em class="t-en">in</em><em class="t-ph">pulg</em></b><small>0′0″ - 0′8″</small></span><span class="tg">PATV</span></div>
+                        <div tabindex="0" class="mm-row mm-npatv" data-i="6"><span class="nm"><em class="t-en">Chest Level</em><em class="t-ph">Hanggang Dibdib</em></span><span class="rg"><b>3.2-3.8 ft</b><small>38-45 <em class="t-en">in</em><em class="t-ph">pulg</em></small></span><span class="tg">NPATV</span></div>
+                        <div tabindex="0" class="mm-row mm-npatv" data-i="5"><span class="nm"><em class="t-en">Waist Level</em><em class="t-ph">Hanggang Baywang</em></span><span class="rg"><b>2.3-3.1 ft</b><small>27-37 <em class="t-en">in</em><em class="t-ph">pulg</em></small></span><span class="tg">NPATV</span></div>
+                        <div tabindex="0" class="mm-row mm-npatv" data-i="4"><span class="nm"><em class="t-en">Tires Level</em><em class="t-ph">Hanggang Gulong</em></span><span class="rg"><b>1.7-2.2 ft</b><small>20-26 <em class="t-en">in</em><em class="t-ph">pulg</em></small></span><span class="tg">NPATV</span></div>
+                        <div tabindex="0" class="mm-row mm-nplv" data-i="3"><span class="nm"><em class="t-en">Knee Level</em><em class="t-ph">Hanggang Tuhod</em></span><span class="rg"><b>1.2-1.6 ft</b><small>14-19 <em class="t-en">in</em><em class="t-ph">pulg</em></small></span><span class="tg">NPLV</span></div>
+                        <div tabindex="0" class="mm-row mm-nplv" data-i="2"><span class="nm"><em class="t-en">Half Tire Level</em><em class="t-ph">Hanggang Kalahating Gulong</em></span><span class="rg"><b>0.9-1.1 ft</b><small>11-13 <em class="t-en">in</em><em class="t-ph">pulg</em></small></span><span class="tg">NPLV</span></div>
+                        <div tabindex="0" class="mm-row mm-patv" data-i="1"><span class="nm"><em class="t-en">Half Knee Level</em><em class="t-ph">Hanggang Kalahating Tuhod</em></span><span class="rg"><b>0.8 ft</b><small>9-10 <em class="t-en">in</em><em class="t-ph">pulg</em></small></span><span class="tg">PATV</span></div>
+                        <div tabindex="0" class="mm-row mm-patv" data-i="0"><span class="nm"><em class="t-en">Gutter Level</em><em class="t-ph">Hanggang Gutter</em></span><span class="rg"><b>0-0.7 ft</b><small>0-8 <em class="t-en">in</em><em class="t-ph">pulg</em></small></span><span class="tg">PATV</span></div>
                     </div>
                 </div>
-                <div class="mm-legend"><em class="t-en"><b>PATV</b> Passable to All Types of Vehicles &middot; <b>NPLV</b> Not Passable to Light Vehicles &middot; <b>NPATV</b> Not Passable to All Types of Vehicles &middot; ′ = ft, ″ = in</em><em class="t-ph"><b>PATV</b> Madaanan ng Lahat ng Uri ng Sasakyan &middot; <b>NPLV</b> Hindi Madaanan ng Magagaang Sasakyan &middot; <b>NPATV</b> Hindi Madaanan ng Lahat ng Uri ng Sasakyan &middot; ′ = ft, ″ = pulg</em></div>
+                <div class="mm-legend"><em class="t-en"><b>PATV</b> Passable to All Types of Vehicles &middot; <b>NPLV</b> Not Passable to Light Vehicles &middot; <b>NPATV</b> Not Passable to All Types of Vehicles &middot; Rows show feet. Hover or tap a row for inches.</em><em class="t-ph"><b>PATV</b> Madaanan ng Lahat ng Uri ng Sasakyan &middot; <b>NPLV</b> Hindi Madaanan ng Magagaang Sasakyan &middot; <b>NPATV</b> Hindi Madaanan ng Lahat ng Uri ng Sasakyan &middot; Talampakan ang ipinapakita. I-hover o i-tap ang hanay para sa pulgada.</em></div>
             </section>
             <!-- PAGASA: rainfall rate only -->
             <section class="agency" id="pg-panel">
@@ -3669,7 +3712,10 @@ BARANGAY_HTML = """<!DOCTYPE html>
             document.getElementById('mm-in').innerHTML = inches.toFixed(1) + '<small>' + bi('in','pulg') + '</small>';
             document.getElementById('mm-ft').innerHTML = ft + ' ft ' + (inches - ft * 12).toFixed(1) + ' ' + bi('in','pulg');
             document.getElementById('mm-name').innerHTML = bi(MMDA_NAME_EN[idx], MMDA_NAME_PH[idx]);
-            document.getElementById('mm-fill').style.height = ((idx + frac) / MMDA_HI.length * 100) + '%';
+            document.getElementById('mm-big').innerHTML = inches.toFixed(1) + '<small>' + bi('in','pulg') + '</small>';
+            const fillPct = ((idx + frac) / MMDA_HI.length * 100) + '%';
+            document.getElementById('mm-fill').style.height = fillPct;
+            document.getElementById('mm-tank').style.setProperty('--fill', fillPct);
         }
 
         // ---- Language toggle: flips body.lang-en <-> body.lang-ph; CSS does the rest ----
